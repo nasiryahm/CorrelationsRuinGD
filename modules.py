@@ -75,7 +75,7 @@ class DecorLinear(torch.nn.Module):
             )
             # self.gains *= normalizer
         elif self.decorrelation_method == "foldiak":
-            w_grads = corr
+            w_grads = -corr
 
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
