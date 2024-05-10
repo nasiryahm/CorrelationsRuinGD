@@ -159,6 +159,10 @@ def run(config: DictConfig) -> None:
     if config.decorrelation_method == "None":
         config.decorrelation_method = None
 
+    # For now foldiak is too slow unfortunately
+    if config.decorrelation_method == "foldiak":
+        exit()
+
     metrics = train_network(
         batch_size=config.batch_size,
         dataset=config.dataset,

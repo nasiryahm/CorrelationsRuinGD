@@ -25,7 +25,7 @@ class DecorLinear(torch.nn.Module):
             torch.empty(in_features, in_features, **factory_kwargs),
         )
 
-        if self.decorrelation_method == "scaled":
+        if self.decorrelation_method in ["scaled", "scalitened"]:
             self.gains = torch.nn.Parameter(torch.empty(in_features, **factory_kwargs))
 
         self.weight.requires_grad = False
@@ -38,18 +38,18 @@ class DecorLinear(torch.nn.Module):
 
     def reset_decor_parameters(self):
         torch.nn.init.eye_(self.weight)
-        if self.decorrelation_method == "scaled":
+        if self.decorrelation_method in ["scaled"]:
             torch.nn.init.ones_(self.gains)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        self.undecorrelated_state = input
-        gain = self.gains if self.decorrelation_method == "scaled" else 1.0
+        gain = self.gains if self.decorrelation_method in ["scaled"] else 1.0
+        self.undecorrelated_state = gain * input
         if self.decorrelation_method == "foldiak":
-            self.decorrelated_state = gain * F.linear(
+            self.decorrelated_state = F.linear(
                 input, torch.linalg.inv(self.weight).detach()
             )
         else:
-            self.decorrelated_state = gain * F.linear(input, self.weight)
+            self.decorrelated_state = F.linear(input, self.weight)
         return self.decorrelated_state
 
     def update_grads(self, _) -> None:
@@ -67,13 +67,10 @@ class DecorLinear(torch.nn.Module):
         elif self.decorrelation_method == "scaled":
             w_grads = corr @ self.weight.data
             normalizer = torch.sqrt(
-                torch.sum(self.undecorrelated_state**2, axis=0)
-                / (torch.sum(self.decorrelated_state**2, axis=0) + 1e-8)
-            )
-            g_grads = (
-                normalizer * self.gains.data + (1.0 - normalizer) * self.gains.data
-            )
-            # self.gains *= normalizer
+                (torch.sum(self.undecorrelated_state**2, axis=0))
+            ) / torch.sqrt((torch.sum(self.decorrelated_state**2, axis=0) + 1e-8))
+            self.gains.data *= normalizer
+
         elif self.decorrelation_method == "foldiak":
             w_grads = -corr
 
@@ -83,16 +80,12 @@ class DecorLinear(torch.nn.Module):
 
         # Update grads of decorrelation matrix
         self.weight.grad = w_grads
-        if self.decorrelation_method == "scaled":
-            self.gains.grad = g_grads
 
     def get_fwd_params(self):
         return []
 
     def get_decor_params(self):
         params = [self.weight]
-        if self.decorrelation_method == "scaled":
-            params += [self.gains]
         return params
 
 
