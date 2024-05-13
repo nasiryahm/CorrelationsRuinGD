@@ -203,13 +203,12 @@ def construct_dataloaders(
     std=None,
     device="cpu",
 ):
-    train_kwargs = {"batch_size": batch_size}
-    test_kwargs = {"batch_size": batch_size}
-    # if device[:5] == "cuda":
+    train_kwargs = {"batch_size": batch_size, "num_workers": 0}
+    test_kwargs = {"batch_size": batch_size, "num_workers": 0}
     # cuda_kwargs = {
     #     "num_workers": 1,
-    #     "pin_memory": True,
-    #     "shuffle": False,
+    #     # "pin_memory": True,
+    #     "shuffle": True,
     # }  # Shuffle to false for replicability
     # train_kwargs.update(cuda_kwargs)
     # test_kwargs.update(cuda_kwargs)

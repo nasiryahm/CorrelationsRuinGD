@@ -5,13 +5,14 @@ batch_size: 256
 dataset: MNIST
 device: cuda:0
 bias: True
+layer_type: FA
 decorrelation_method: None
-decor_lr: 1e-3
+decor_lr: 1e-4
 n_hidden_layers: 3
 hidden_layer_size: 1000
 loss_func_type: CCE
 optimizer_type: Adam
-fwd_lr: 1e-2
+fwd_lr: 1e-3
 seed: 42
 nb_epochs: 10
 loud: True

@@ -1,6 +1,5 @@
 import torch
 import torch.nn.functional as F
-import numpy as np
 
 
 class DecorLinear(torch.nn.Module):
@@ -89,96 +88,11 @@ class DecorLinear(torch.nn.Module):
         return params
 
 
-class BPLinear(torch.nn.Linear):
-    """BP Linear layer"""
+class HalfBatchDecorLinear(DecorLinear):
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        output = super().forward(input)
+        half_batch_width = len(input) // 2
 
-    def __str__(self):
-        return "BPLinear"
-
-    def get_fwd_params(self):
-        params = [self.weight]
-        if self.bias is not None:
-            params.append(self.bias)
-        return params
-
-    def get_decor_params(self):
-        return []
-
-
-class DecorNet(torch.nn.Module):
-    def __init__(
-        self,
-        in_size=28 * 28,
-        out_size=10,
-        hidden_size=1000,
-        n_hidden_layers=0,
-        layer_type=BPLinear,
-        activation_function=torch.nn.LeakyReLU(),
-        biases=True,
-        decorrelation=False,
-        decorrelation_method="copi",
-    ):
-        super(DecorNet, self).__init__()
-        self.layers = []
-        self.decorrelation = decorrelation
-
-        for i in range(n_hidden_layers + 1):
-            in_dim = in_size if i == 0 else hidden_size
-            out_dim = hidden_size if i < n_hidden_layers else out_size
-            if decorrelation_method is not None:
-                self.layers.append(
-                    DecorLinear(
-                        in_dim, in_dim, decorrelation_method=decorrelation_method
-                    )
-                )
-            self.layers.append(
-                layer_type(
-                    in_dim,
-                    out_dim,
-                    bias=biases,
-                )
-            )
-
-        self.activation_function = activation_function
-        self.layers = torch.nn.ModuleList(self.layers)
-
-    def forward(self, x):
-        for indx, layer in enumerate(self.layers):
-            x = layer(x)
-            # TODO: Don't activation func if decor
-            if (indx + 1) < len(self.layers) and not isinstance(layer, DecorLinear):
-                x = self.activation_function(x)
-        return x
-
-    def train_step(self, data, target, onehots, loss_func):
-        # Duplicate data for network clean/noisy pass
-        output = self(data)
-        loss = loss_func(output[: len(data)], target, onehots)
-        total_loss = loss.sum()
-        total_loss.backward()
-        with torch.no_grad():
-            for layer in self.layers:
-                if isinstance(layer, DecorLinear):
-                    layer.update_grads(None)
-
-        return total_loss
-
-    def test_step(self, data, target, onehots, loss_func):
-        with torch.no_grad():
-            output = self(data)
-            loss = torch.sum(
-                loss_func(output, target, onehots)
-            ).item()  # sum up batch loss
-            return loss, output
-
-    def get_fwd_params(self):
-        params = []
-        for layer in self.layers:
-            params.extend(layer.get_fwd_params())
-        return params
-
-    def get_decor_params(self):
-        params = []
-        for layer in self.layers:
-            params.extend(layer.get_decor_params())
-        return params
+        self.undecorrelated_state = self.undecorrelated_state[:half_batch_width]
+        self.decorrelated_state = self.decorrelated_state[:half_batch_width]
+        return output

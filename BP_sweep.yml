@@ -1,0 +1,72 @@
+#### Mult-Layer SWEEP
+program: run.py
+method: grid
+metric:
+  goal: minimize
+  name: train/loss
+
+parameters:
+  nb_epochs:
+    value: 100
+
+  layer_type:
+    value: BP
+    # - BP
+    # - NP
+    # - FA
+
+  seed: 
+    values:
+    - 42
+    - 43
+    - 44
+    - 45
+    - 46
+
+  device: 
+    value: cuda:0
+
+  dataset: 
+    value: CIFAR10
+    # values:
+    # - MNIST
+    # - CIFAR10
+    # - CIFAR100
+
+  decorrelation_method:
+    values:
+    - None
+
+  decor_lr:
+    value: 0.0
+  
+  fwd_lr:
+    values:
+    # - 0.1
+    # - 0.05
+    # - 0.025
+    # - 0.0125
+    # - 0.00625
+    # - 0.003125
+    # - 0.0015625
+    # - 0.00078125
+    # - 0.000390625
+    # - 0.0001953125
+    - 0.00009765625
+    # - 0.000048828125
+    # - 0.0000244140625
+    # - 0.00001220703125
+
+  
+  n_hidden_layers:
+    values:
+    - 4
+
+  wandb.mode: 
+    value: "online"
+
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}

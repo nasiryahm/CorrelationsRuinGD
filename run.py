@@ -5,7 +5,11 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from utils import *
-from modules import *
+from models import DecorNet, PerturbNet
+from bp import BPLinear
+from decor import DecorLinear
+from fa import FALinear
+from np import NPLinear
 import wandb
 import hydra
 from omegaconf import OmegaConf, DictConfig
@@ -20,12 +24,14 @@ def train_network(
     decor_lr=1e-3,
     n_hidden_layers=3,
     hidden_layer_size=1000,
+    layer_type=BPLinear,
     loss_func_type="CCE",  # "MSE"
     optimizer_type="Adam",
     fwd_lr=1e-2,
     seed=42,
     nb_epochs=10,
     loud=True,
+    layer_kwargs={},
     wandb=None,
 ):
 
@@ -45,14 +51,6 @@ def train_network(
     elif dataset == "CIFAR100":
         tv_dataset = torchvision.datasets.CIFAR100
 
-    # layer_mapping = {
-    #     "NP": NPLinear,
-    #     "WP": WPLinear,
-    #     "NTWP": NTWPLinear,
-    #     "BP": BPLinear,
-    # }
-    layer_type = BPLinear
-
     train_loader, test_loader = construct_dataloaders(
         tv_dataset, batch_size=batch_size, device=device
     )
@@ -70,15 +68,28 @@ def train_network(
         out_size = 200
 
     # Initialize model
-    model = DecorNet(
+    if layer_type in [BPLinear, FALinear]:
+        model_type = DecorNet
+    if layer_type in [NPLinear]:
+        model_type = PerturbNet
+        distribution = torch.distributions.Normal(
+            torch.tensor([0.0]).to(torch.float32).to(device),
+            torch.tensor([1.0]).to(device),
+        )
+        dist_sampler = lambda x: distribution.sample([1] + x).squeeze_(-1).sum(0)
+        layer_kwargs = {
+            "sigma": 1e-6,
+            "dist_sampler": dist_sampler,
+        }
+    model = model_type(
         in_size=in_size,
         out_size=out_size,
         n_hidden_layers=n_hidden_layers,
         hidden_size=hidden_layer_size,
         layer_type=layer_type,
-        decorrelation=decor_lr,
         decorrelation_method=decorrelation_method,
         biases=bias,
+        layer_kwargs=layer_kwargs,
     )
     model.to(device)
 
@@ -148,6 +159,8 @@ def train_network(
 
 @hydra.main(version_base="1.3", config_path="conf/", config_name="config")
 def run(config: DictConfig) -> None:
+    torch.set_num_threads(2)
+
     cfg = OmegaConf.to_container(config, resolve=True, throw_on_missing=True)
     wandb.init(
         config=cfg,
@@ -163,6 +176,13 @@ def run(config: DictConfig) -> None:
     if config.decorrelation_method == "foldiak":
         exit()
 
+    layer_type = BPLinear
+    assert config.layer_type in ["BP", "FA", "NP"], "Invalid layer type"
+    if config.layer_type == "FA":
+        layer_type = FALinear
+    elif config.layer_type == "NP":
+        layer_type = NPLinear
+
     metrics = train_network(
         batch_size=config.batch_size,
         dataset=config.dataset,
@@ -172,6 +192,7 @@ def run(config: DictConfig) -> None:
         decor_lr=config.decor_lr,
         n_hidden_layers=config.n_hidden_layers,
         hidden_layer_size=config.hidden_layer_size,
+        layer_type=layer_type,
         loss_func_type=config.loss_func_type,
         optimizer_type=config.optimizer_type,
         fwd_lr=config.fwd_lr,
