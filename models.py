@@ -2,10 +2,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from decor import DecorLinear, HalfBatchDecorLinear
-from fa import FALinear
+from decor import DecorLinear, HalfBatchDecorLinear, MultiDecor
+from fa import FALinear, FAConv2d
 from np import NPLinear
-from bp import BPLinear
+from bp import BPLinear, BPConv2d
 
 
 class DecorNet(torch.nn.Module):
@@ -156,6 +156,147 @@ class PerturbNet(torch.nn.Module):
                 loss_func(output[: len(data)], target, onehots)
             ).item()  # sum up batch loss
             return loss, output[: len(data)]
+
+    def get_fwd_params(self):
+        params = []
+        for layer in self.layers:
+            params.extend(layer.get_fwd_params())
+        return params
+
+    def get_decor_params(self):
+        params = []
+        for layer in self.layers:
+            params.extend(layer.get_decor_params())
+        return params
+
+
+class DecorConvNet(torch.nn.Module):
+    def __init__(
+        self,
+        in_size,
+        hidden_size=100,
+        n_hidden_layers=0,
+        out_size=10,
+        layer_type=BPConv2d,
+        activation_function=torch.nn.LeakyReLU(),
+        biases=True,
+        decorrelation_method="copi",
+        layer_kwargs={},
+    ):
+        super(DecorConvNet, self).__init__()
+        self.layers = []
+        assert n_hidden_layers > 0, "Need at least one hidden layer"
+        conv_layer_type = layer_type
+        assert conv_layer_type in [BPConv2d, FAConv2d], "Only BPConv2d supported"
+        dense_layer_type = BPLinear if layer_type == BPConv2d else FALinear
+
+        self.in_shape = in_size  # This is a shape for 3D input
+        current_shape = in_size
+        padding = 0
+        stride = 1
+        for i in range(n_hidden_layers):
+            in_dim = 3 if i == 0 else hidden_size
+            out_dim = hidden_size
+            kernel_size = 5
+
+            if decorrelation_method is not None:
+                self.layers.append(
+                    MultiDecor(
+                        current_shape,
+                        decorrelation_method=decorrelation_method,
+                        **layer_kwargs,
+                    )
+                )
+
+            self.layers.append(
+                conv_layer_type(
+                    in_dim,
+                    out_dim,
+                    [kernel_size, kernel_size],
+                    padding=padding,
+                    stride=stride,
+                    **layer_kwargs,
+                )
+            )
+
+            current_shape = [
+                out_dim,
+                int((current_shape[1] - kernel_size + 2 * padding) / stride + 1),
+                int((current_shape[2] - kernel_size + 2 * padding) / stride + 1),
+            ]
+
+        if decorrelation_method is not None:
+            self.layers.append(
+                MultiDecor(
+                    current_shape,
+                    decorrelation_method=decorrelation_method,
+                    **layer_kwargs,
+                )
+            )
+
+        self.layers.append(
+            dense_layer_type(
+                int(np.prod(current_shape)),
+                1024,
+                bias=biases,
+                **layer_kwargs,
+            )
+        )
+
+        if decorrelation_method is not None:
+            self.layers.append(
+                DecorLinear(
+                    1024,
+                    1024,
+                    decorrelation_method=decorrelation_method,
+                    **layer_kwargs,
+                )
+            )
+
+        self.layers.append(
+            dense_layer_type(
+                1024,
+                out_size,
+                bias=biases,
+                **layer_kwargs,
+            )
+        )
+
+        self.activation_function = activation_function
+        self.layers = torch.nn.ModuleList(self.layers)
+
+    def forward(self, x):
+        x = x.view(x.size(0), *self.in_shape)
+        for indx, layer in enumerate(self.layers):
+            if isinstance(layer, BPLinear) or isinstance(layer, FALinear):
+                x = x.view(x.size(0), -1)
+            x = layer(x)
+            if (indx + 1) < len(self.layers) and (
+                not isinstance(layer, MultiDecor) or not isinstance(layer, DecorLinear)
+            ):
+                x = self.activation_function(x)
+        return x
+
+    def train_step(self, data, target, onehots, loss_func):
+        # Duplicate data for network clean/noisy pass
+        output = self(data)
+        loss = loss_func(output[: len(data)], target, onehots)
+        total_loss = loss.sum()
+        total_loss.backward()
+        with torch.no_grad():
+            for layer in self.layers:
+                if isinstance(layer, MultiDecor) or isinstance(layer, DecorLinear):
+                    layer.update_grads(None)
+
+        return total_loss
+
+    def test_step(self, data, target, onehots, loss_func):
+        with torch.no_grad():
+            output = self(data)
+            loss = torch.sum(
+                loss_func(output, target, onehots)
+            ).item()  # sum up batch loss
+            return loss, output
 
     def get_fwd_params(self):
         params = []

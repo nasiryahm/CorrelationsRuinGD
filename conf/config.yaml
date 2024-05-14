@@ -2,17 +2,17 @@ default:
   - _self_
 
 batch_size: 256
-dataset: MNIST
-device: cuda:0
+dataset: TIN
+device: cuda:8
 bias: True
-layer_type: FA
+layer_type: BPConv
 decorrelation_method: None
 decor_lr: 1e-4
-n_hidden_layers: 3
-hidden_layer_size: 1000
+n_hidden_layers: 4
+hidden_layer_size: 64
 loss_func_type: CCE
 optimizer_type: Adam
-fwd_lr: 1e-3
+fwd_lr: 1e-6
 seed: 42
 nb_epochs: 10
 loud: True

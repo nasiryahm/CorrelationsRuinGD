@@ -5,10 +5,10 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from utils import *
-from models import DecorNet, PerturbNet
-from bp import BPLinear
+from models import DecorNet, DecorConvNet, PerturbNet
+from bp import BPLinear, BPConv2d
 from decor import DecorLinear
-from fa import FALinear
+from fa import FALinear, FAConv2d
 from np import NPLinear
 import wandb
 import hydra
@@ -81,6 +81,13 @@ def train_network(
             "sigma": 1e-6,
             "dist_sampler": dist_sampler,
         }
+    if layer_type in [BPConv2d, FAConv2d]:
+        model_type = DecorConvNet
+        in_size = [3, 64, 64]
+        if dataset in ["CIFAR10", "CIFAR100"]:
+            in_size = [3, 32, 32]
+        if dataset == "MNIST":
+            in_size = [1, 28, 28]
     model = model_type(
         in_size=in_size,
         out_size=out_size,
@@ -144,7 +151,7 @@ def train_network(
             test_loader,
             loss_func,
             e,
-            loud=False,
+            loud=loud,
             wandb=wandb,
         )
         if e < nb_epochs:
@@ -177,11 +184,21 @@ def run(config: DictConfig) -> None:
         exit()
 
     layer_type = BPLinear
-    assert config.layer_type in ["BP", "FA", "NP"], "Invalid layer type"
+    assert config.layer_type in [
+        "BP",
+        "FA",
+        "NP",
+        "BPConv",
+        "FAConv",
+    ], "Invalid layer type"
     if config.layer_type == "FA":
         layer_type = FALinear
     elif config.layer_type == "NP":
         layer_type = NPLinear
+    elif config.layer_type == "BPConv":
+        layer_type = BPConv2d
+    elif config.layer_type == "FAConv":
+        layer_type = FAConv2d
 
     metrics = train_network(
         batch_size=config.batch_size,

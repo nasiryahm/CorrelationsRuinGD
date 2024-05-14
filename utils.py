@@ -1,6 +1,7 @@
 import torch
 import torchvision
 import torch.nn.functional as F
+from torchvision.transforms import v2
 import os
 import numpy as np
 
@@ -170,9 +171,14 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
     y_train_onehot = torch.nn.functional.one_hot(y_train, torch.max(y_train) + 1)
     y_test_onehot = torch.nn.functional.one_hot(y_test, torch.max(y_train) + 1)
 
-    # Normalizing data
-    x_train = x_train / 255.0
-    x_test = x_test / 255.0
+    # Data to device (datasets small enough to fit directly)
+    x_train = x_train.to(device).type(fltype)
+    y_train = y_train.type(torch.LongTensor).to(device)
+    y_train_onehot = y_train_onehot.to(device).type(fltype)
+
+    x_test = x_test.to(device).type(fltype)
+    y_test = y_test.type(torch.LongTensor).to(device)
+    y_test_onehot = y_test_onehot.to(device).type(fltype)
 
     if std is not None:
         d_mean = torch.mean(x_train, axis=0)
@@ -184,14 +190,9 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         x_train = x_train - d_mean + mean
         x_test = x_test - d_mean + mean
 
-    # Data to device (datasets small enough to fit directly)
-    x_train = x_train.to(device).type(fltype)
-    y_train = y_train.type(torch.LongTensor).to(device)
-    y_train_onehot = y_train_onehot.to(device).type(fltype)
-
-    x_test = x_test.to(device).type(fltype)
-    y_test = y_test.type(torch.LongTensor).to(device)
-    y_test_onehot = y_test_onehot.to(device).type(fltype)
+    if dataset_importer == "TIN":
+        x_train = x_train.reshape(-1, 3, 64, 64)
+        x_test = x_test.reshape(-1, 3, 64, 64)
 
     return x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot
 
@@ -203,21 +204,27 @@ def construct_dataloaders(
     std=None,
     device="cpu",
 ):
-    train_kwargs = {"batch_size": batch_size, "num_workers": 0}
+    train_kwargs = {"batch_size": batch_size, "num_workers": 0, "shuffle": True}
     test_kwargs = {"batch_size": batch_size, "num_workers": 0}
-    # cuda_kwargs = {
-    #     "num_workers": 1,
-    #     # "pin_memory": True,
-    #     "shuffle": True,
-    # }  # Shuffle to false for replicability
-    # train_kwargs.update(cuda_kwargs)
-    # test_kwargs.update(cuda_kwargs)
 
+    transforms = None
+    if tv_dataset == "TIN":
+        transforms = torchvision.transforms.Compose(
+            [
+                # v2.RandomHorizontalFlip(p=0.5),
+                # torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(
+                    (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                ),
+            ]
+        )
     x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
         tv_dataset, device, torch.float32, validation=False, mean=mean, std=std
     )
 
-    train_dataset = ClassificationLoadedDataset(x_train, y_train, y_train_onehot)
+    train_dataset = ClassificationLoadedDataset(
+        x_train, y_train, y_train_onehot, transforms
+    )
     test_dataset = ClassificationLoadedDataset(x_test, y_test, y_test_onehot)
 
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)

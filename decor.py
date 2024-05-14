@@ -96,3 +96,53 @@ class HalfBatchDecorLinear(DecorLinear):
         self.undecorrelated_state = self.undecorrelated_state[:half_batch_width]
         self.decorrelated_state = self.decorrelated_state[:half_batch_width]
         return output
+
+
+class MultiDecor(torch.nn.Module):
+    def __init__(
+        self,
+        in_shape: tuple,
+        decorrelation_method: str = "copi",
+        device=None,
+        dtype=None,
+    ) -> None:
+        super().__init__()
+        assert len(in_shape) == 3, "MultiDecor only supports 3D inputs, (C, H, W)"
+        assert decorrelation_method in ["copi", "scaled", "foldiak"]
+        factory_kwargs = {"device": device, "dtype": dtype}
+
+        self.in_shape = in_shape
+        self.channel_dim = in_shape[0]
+        self.image_dim = int(in_shape[1] * in_shape[2])
+
+        self.channel_decor = DecorLinear(
+            self.channel_dim, self.channel_dim, decorrelation_method, **factory_kwargs
+        )
+        self.image_decor = DecorLinear(
+            self.image_dim, self.image_dim, decorrelation_method, **factory_kwargs
+        )
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        input = input.view(-1, *self.in_shape)
+        init_shape = input.shape
+        input = input.view(init_shape[0] * self.channel_dim, self.image_dim)
+        input = self.image_decor.forward(input)
+        input = input.view(init_shape)
+        input = input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim)
+        input = self.channel_decor.forward(input)
+        input = input.view(init_shape)
+        return input
+
+    def update_grads(self, _) -> None:
+        self.channel_decor.update_grads(_)
+        self.image_decor.update_grads(_)
+
+    def get_fwd_params(self):
+        params = self.channel_decor.get_fwd_params() + self.image_decor.get_fwd_params()
+        return params
+
+    def get_decor_params(self):
+        params = (
+            self.channel_decor.get_decor_params() + self.image_decor.get_decor_params()
+        )
+        return params

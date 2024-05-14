@@ -7,38 +7,41 @@ metric:
 
 parameters:
   nb_epochs:
-    value: 100
+    value: 20
 
   layer_type:
-    value: BP
+    value: BPConv
     # - BP
     # - NP
     # - FA
 
   seed: 
-    values:
-    - 42
-    - 43
-    - 44
-    - 45
-    - 46
+    value: 42
+    # - 42
+    # - 43
+    # - 44
+    # - 45
+    # - 46
 
   device: 
     value: cuda:0
 
   dataset: 
-    value: CIFAR10
+    value: TIN
     # values:
-    # - MNIST
+    # # - MNIST
     # - CIFAR10
     # - CIFAR100
 
   decorrelation_method:
-    values:
-    - None
+    value: None
+    # values:
+    # - copi
+    # - scaled
 
   decor_lr:
     value: 0.0
+    # - 0.0015625
   
   fwd_lr:
     values:
@@ -50,17 +53,27 @@ parameters:
     # - 0.003125
     # - 0.0015625
     # - 0.00078125
-    # - 0.000390625
-    # - 0.0001953125
+    - 0.000390625
+    - 0.0001953125
     - 0.00009765625
-    # - 0.000048828125
-    # - 0.0000244140625
-    # - 0.00001220703125
+    - 0.000048828125
+    - 0.0000244140625
+    - 0.00001220703125
+    - 0.000006103515625
+    - 0.0000030517578125
+    # - 0.00000152587890625
+    # - 0.000000762939453125
+    # - 0.0000003814697265625
 
   
   n_hidden_layers:
-    values:
-    - 4
+    value: 4
+
+  hidden_layer_size: 
+    value: 32 # This is number of conv filters!
+
+  batch_size:
+    value: 256
 
   wandb.mode: 
     value: "online"
