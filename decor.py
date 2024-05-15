@@ -125,13 +125,14 @@ class MultiDecor(torch.nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         input = input.view(-1, *self.in_shape)
         init_shape = input.shape
-        input = input.view(init_shape[0] * self.channel_dim, self.image_dim)
+        input = input.reshape(init_shape[0] * self.channel_dim, self.image_dim)
         input = self.image_decor.forward(input)
-        input = input.view(init_shape)
+        input = input.reshape(init_shape)
         input = input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim)
         input = self.channel_decor.forward(input)
-        input = input.view(init_shape)
-        return input
+        input = input.reshape(init_shape[0], init_shape[2], init_shape[3], -1)
+        input = input.permute(0, 3, 1, 2)
+        return input.contiguous()
 
     def update_grads(self, _) -> None:
         self.channel_decor.update_grads(_)

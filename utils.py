@@ -207,12 +207,20 @@ def construct_dataloaders(
     train_kwargs = {"batch_size": batch_size, "num_workers": 0, "shuffle": True}
     test_kwargs = {"batch_size": batch_size, "num_workers": 0}
 
-    transforms = None
+    train_transforms, test_transforms = None, None
     if tv_dataset == "TIN":
-        transforms = torchvision.transforms.Compose(
+        train_transforms = torchvision.transforms.Compose(
             [
-                # v2.RandomHorizontalFlip(p=0.5),
+                v2.RandomHorizontalFlip(p=0.5),
                 # torchvision.transforms.ToTensor(),
+                torchvision.transforms.Normalize(
+                    (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
+                ),
+            ]
+        )
+
+        test_transforms = torchvision.transforms.Compose(
+            [
                 torchvision.transforms.Normalize(
                     (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
                 ),
@@ -223,9 +231,11 @@ def construct_dataloaders(
     )
 
     train_dataset = ClassificationLoadedDataset(
-        x_train, y_train, y_train_onehot, transforms
+        x_train, y_train, y_train_onehot, train_transforms
     )
-    test_dataset = ClassificationLoadedDataset(x_test, y_test, y_test_onehot)
+    test_dataset = ClassificationLoadedDataset(
+        x_test, y_test, y_test_onehot, test_transforms
+    )
 
     train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
     test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
