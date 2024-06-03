@@ -180,6 +180,10 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
     y_test = y_test.type(torch.LongTensor).to(device)
     y_test_onehot = y_test_onehot.to(device).type(fltype)
 
+    maxval = torch.max(x_train)
+    x_train = x_train / maxval
+    x_test = x_test / maxval
+
     if std is not None:
         d_mean = torch.mean(x_train, axis=0)
         d_std = torch.std(x_train, axis=0) + 1e-8
@@ -193,6 +197,24 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
     if dataset_importer == "TIN":
         x_train = x_train.reshape(-1, 3, 64, 64)
         x_test = x_test.reshape(-1, 3, 64, 64)
+
+        means = torch.tensor([0.485, 0.456, 0.406]).to(device)
+        stds = torch.tensor([0.229, 0.224, 0.225]).to(device)
+        x_train = (x_train - means[None, :, None, None]) / stds[None, :, None, None]
+        x_test = (x_test - means[None, :, None, None]) / stds[None, :, None, None]
+
+    if (
+        dataset_importer == torchvision.datasets.CIFAR10
+        or dataset_importer == torchvision.datasets.CIFAR100
+    ):
+        x_train = x_train.reshape(-1, 3, 32, 32)
+        x_test = x_test.reshape(-1, 3, 32, 32)
+
+        means = torch.tensor([0.4914, 0.4822, 0.4465]).to(device)
+        stds = torch.tensor([0.2023, 0.1994, 0.2010]).to(device)
+
+        x_train = (x_train - means[None, :, None, None]) / stds[None, :, None, None]
+        x_test = (x_test - means[None, :, None, None]) / stds[None, :, None, None]
 
     return x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot
 
@@ -209,23 +231,12 @@ def construct_dataloaders(
 
     train_transforms, test_transforms = None, None
     if tv_dataset == "TIN":
-        train_transforms = torchvision.transforms.Compose(
+        train_transforms = v2.Compose(
             [
                 v2.RandomHorizontalFlip(p=0.5),
-                # torchvision.transforms.ToTensor(),
-                torchvision.transforms.Normalize(
-                    (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-                ),
             ]
         )
 
-        test_transforms = torchvision.transforms.Compose(
-            [
-                torchvision.transforms.Normalize(
-                    (0.485, 0.456, 0.406), (0.229, 0.224, 0.225)
-                ),
-            ]
-        )
     x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
         tv_dataset, device, torch.float32, validation=False, mean=mean, std=std
     )
@@ -297,6 +308,8 @@ def train(
             o.zero_grad()
 
         loss = model.train_step(data, target, onehots, loss_func)
+
+        # torch.nn.utils.clip_grad_norm(model.get_fwd_params(), 0.1)
 
         for o in optimizers:
             o.step()

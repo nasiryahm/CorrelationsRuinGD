@@ -24,9 +24,6 @@ class DecorLinear(torch.nn.Module):
             torch.empty(in_features, in_features, **factory_kwargs),
         )
 
-        if self.decorrelation_method in ["scaled", "scalitened"]:
-            self.gains = torch.nn.Parameter(torch.empty(in_features, **factory_kwargs))
-
         self.weight.requires_grad = False
 
         self.eye = torch.nn.Parameter(
@@ -37,18 +34,15 @@ class DecorLinear(torch.nn.Module):
 
     def reset_decor_parameters(self):
         torch.nn.init.eye_(self.weight)
-        if self.decorrelation_method in ["scaled"]:
-            torch.nn.init.ones_(self.gains)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        gain = self.gains if self.decorrelation_method in ["scaled"] else 1.0
-        self.undecorrelated_state = gain * input
+        self.undecorrelated_state = input
         if self.decorrelation_method == "foldiak":
             self.decorrelated_state = F.linear(
                 input, torch.linalg.inv(self.weight).detach()
             )
         else:
-            self.decorrelated_state = F.linear(input, self.weight)
+            self.decorrelated_state = F.linear(self.undecorrelated_state, self.weight)
         return self.decorrelated_state
 
     def update_grads(self, _) -> None:
@@ -64,11 +58,13 @@ class DecorLinear(torch.nn.Module):
             off_diag_corr = corr * (1.0 - self.eye)
             w_grads = off_diag_corr @ self.weight.data
         elif self.decorrelation_method == "scaled":
-            w_grads = corr @ self.weight.data
             normalizer = torch.sqrt(
-                (torch.sum(self.undecorrelated_state**2, axis=0))
-            ) / torch.sqrt((torch.sum(self.decorrelated_state**2, axis=0) + 1e-8))
-            self.gains.data *= normalizer
+                (torch.mean(self.undecorrelated_state**2))
+            ) / torch.sqrt((torch.mean(self.decorrelated_state**2)) + 1e-8)
+
+            self.weight.data *= normalizer
+            
+            w_grads = corr @ self.weight.data
 
         elif self.decorrelation_method == "foldiak":
             w_grads = -corr
@@ -116,23 +112,36 @@ class MultiDecor(torch.nn.Module):
         self.image_dim = int(in_shape[1] * in_shape[2])
 
         self.channel_decor = DecorLinear(
-            self.channel_dim, self.channel_dim, decorrelation_method, **factory_kwargs
+            self.channel_dim,
+            self.channel_dim,
+            decorrelation_method,
+            **factory_kwargs,
         )
         self.image_decor = DecorLinear(
-            self.image_dim, self.image_dim, decorrelation_method, **factory_kwargs
+            self.image_dim,
+            self.image_dim,
+            decorrelation_method,
+            **factory_kwargs,
         )
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         input = input.view(-1, *self.in_shape)
         init_shape = input.shape
         input = input.reshape(init_shape[0] * self.channel_dim, self.image_dim)
-        input = self.image_decor.forward(input)
-        input = input.reshape(init_shape)
-        input = input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim)
-        input = self.channel_decor.forward(input)
-        input = input.reshape(init_shape[0], init_shape[2], init_shape[3], -1)
-        input = input.permute(0, 3, 1, 2)
-        return input.contiguous()
+        decor_input = self.image_decor.forward(input)
+        decor_input = decor_input.reshape(init_shape)
+        decor_input = decor_input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim)
+        decor_input = self.channel_decor.forward(decor_input)
+        decor_input = decor_input.reshape(
+            init_shape[0], init_shape[2], init_shape[3], -1
+        )
+        decor_input = decor_input.permute(0, 3, 1, 2)
+        decor_input = decor_input.contiguous().view(init_shape)
+        return decor_input
+
+    # Define a function to take the input and run the channel decor forward
+    def channel_decor_forward(self, input: torch.Tensor) -> torch.Tensor:
+        return self.channel_decor.forward(input)
 
     def update_grads(self, _) -> None:
         self.channel_decor.update_grads(_)

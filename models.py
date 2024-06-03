@@ -20,6 +20,7 @@ class DecorNet(torch.nn.Module):
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
+        decor_layer_kwargs={},
     ):
         super(DecorNet, self).__init__()
         self.layers = []
@@ -31,7 +32,10 @@ class DecorNet(torch.nn.Module):
             if decorrelation_method is not None:
                 self.layers.append(
                     DecorLinear(
-                        in_dim, in_dim, decorrelation_method=decorrelation_method
+                        in_dim,
+                        in_dim,
+                        decorrelation_method=decorrelation_method,
+                        **decor_layer_kwargs,
                     )
                 )
             self.layers.append(
@@ -47,6 +51,9 @@ class DecorNet(torch.nn.Module):
         self.layers = torch.nn.ModuleList(self.layers)
 
     def forward(self, x):
+        # Flatten any convs
+        if len(x.shape) > 2:
+            x = x.view(x.size(0), -1)
         for indx, layer in enumerate(self.layers):
             x = layer(x)
             # TODO: Don't activation func if decor
@@ -100,6 +107,7 @@ class PerturbNet(torch.nn.Module):
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
+        decor_layer_kwargs={},
     ):
         super(PerturbNet, self).__init__()
         self.layers = []
@@ -115,6 +123,7 @@ class PerturbNet(torch.nn.Module):
                         in_dim,
                         in_dim,
                         decorrelation_method=decorrelation_method,
+                        **decor_layer_kwargs,
                     )
                 )
             self.layers.append(layer_type(in_dim, out_dim, bias=biases, **layer_kwargs))
@@ -123,6 +132,9 @@ class PerturbNet(torch.nn.Module):
         self.layers = torch.nn.ModuleList(self.layers)
 
     def forward(self, x):
+        # Flatten any convs
+        if len(x.shape) > 2:
+            x = x.view(x.size(0), -1)
         for indx, layer in enumerate(self.layers):
             x = layer(x)
             if (indx + 1) < len(self.layers) and not isinstance(
@@ -182,9 +194,11 @@ class DecorConvNet(torch.nn.Module):
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
+        decor_layer_kwargs={},
     ):
         super(DecorConvNet, self).__init__()
         self.layers = []
+
         assert n_hidden_layers > 0, "Need at least one hidden layer"
         conv_layer_type = layer_type
         assert conv_layer_type in [BPConv2d, FAConv2d], "Only BPConv2d supported"
@@ -204,7 +218,7 @@ class DecorConvNet(torch.nn.Module):
                     MultiDecor(
                         current_shape,
                         decorrelation_method=decorrelation_method,
-                        **layer_kwargs,
+                        **decor_layer_kwargs,
                     )
                 )
 
@@ -230,7 +244,7 @@ class DecorConvNet(torch.nn.Module):
                 MultiDecor(
                     current_shape,
                     decorrelation_method=decorrelation_method,
-                    **layer_kwargs,
+                    **decor_layer_kwargs,
                 )
             )
 
@@ -249,7 +263,7 @@ class DecorConvNet(torch.nn.Module):
                     1024,
                     1024,
                     decorrelation_method=decorrelation_method,
-                    **layer_kwargs,
+                    **decor_layer_kwargs,
                 )
             )
 

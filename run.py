@@ -20,6 +20,7 @@ def train_network(
     dataset="MNIST",
     device="cuda",
     bias=True,
+    regularizer_strength=0.0,
     decorrelation_method="copi",
     decor_lr=1e-3,
     n_hidden_layers=3,
@@ -32,10 +33,11 @@ def train_network(
     nb_epochs=10,
     loud=True,
     layer_kwargs={},
+    decor_layer_kwargs={},
     wandb=None,
 ):
 
-    betas = [0.9, 0.999]
+    betas = [0.9, 0.9999]
     eps = 1e-8
 
     # Initializing random seeding
@@ -88,6 +90,7 @@ def train_network(
             in_size = [3, 32, 32]
         if dataset == "MNIST":
             in_size = [1, 28, 28]
+
     model = model_type(
         in_size=in_size,
         out_size=out_size,
@@ -97,6 +100,7 @@ def train_network(
         decorrelation_method=decorrelation_method,
         biases=bias,
         layer_kwargs=layer_kwargs,
+        decor_layer_kwargs=decor_layer_kwargs,
     )
     model.to(device)
 
@@ -113,7 +117,9 @@ def train_network(
             lr=fwd_lr,
         )
     elif optimizer_type == "SGD":
-        fwd_optimizer = torch.optim.SGD(model.get_fwd_params(), lr=fwd_lr)
+        fwd_optimizer = torch.optim.SGD(
+            model.get_fwd_params(), lr=fwd_lr, weight_decay=regularizer_strength
+        )
 
     optimizers = [fwd_optimizer]
     if decorrelation_method is not None:
@@ -205,6 +211,7 @@ def run(config: DictConfig) -> None:
         dataset=config.dataset,
         device=config.device,
         bias=config.bias,
+        regularizer_strength=config.regularizer_strength,
         decorrelation_method=config.decorrelation_method,
         decor_lr=config.decor_lr,
         n_hidden_layers=config.n_hidden_layers,
