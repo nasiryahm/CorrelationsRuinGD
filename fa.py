@@ -34,12 +34,18 @@ class FALinear(torch.nn.Linear):
         self.backward = torch.nn.Parameter(
             torch.FloatTensor(out_features, in_features), requires_grad=False
         )
-        torch.nn.init.kaiming_uniform_(self.backward)
+        self.initialized = False
 
     def __str__(self):
         return "FALinear"
 
+    def initialize_backward(self):
+        if not self.initialized:
+            torch.nn.init.kaiming_uniform_(self.backward)
+            self.initialized = True
+
     def forward(self, input):
+        self.initialize_backward()
         input = input.view(input.size(0), -1)
         return FAFunction.apply(input, self.weight, self.backward, self.bias)
 
@@ -108,13 +114,21 @@ class FAConv2d(torch.nn.Conv2d):
         self.backward = torch.nn.Parameter(
             torch.FloatTensor(*self.weight.shape), requires_grad=False
         )
-        torch.nn.init.kaiming_uniform_(self.backward)
+        self.initialized = False
 
     def __str__(self):
         return "FALinear"
 
+    def initialize_backward(self):
+        if not self.initialized:
+            torch.nn.init.kaiming_uniform_(self.backward)
+            self.initialized = True
+
     def forward(self, input):
-        return FAConv2dFunction.apply(input, self.weight, self.backward, self.bias)
+        self.initialize_backward()
+        return FAConv2dFunction.apply(
+            input, self.weight, self.backward, self.bias, self.stride, self.padding
+        )
 
     def get_fwd_params(self):
         params = [self.weight]

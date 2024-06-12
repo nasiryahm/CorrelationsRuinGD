@@ -36,6 +36,8 @@ class DecorLinear(torch.nn.Module):
         torch.nn.init.eye_(self.weight)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        init_shape = input.shape
+        input = input.view(init_shape[0], -1)
         self.undecorrelated_state = input
         if self.decorrelation_method == "foldiak":
             self.decorrelated_state = F.linear(
@@ -43,7 +45,7 @@ class DecorLinear(torch.nn.Module):
             )
         else:
             self.decorrelated_state = F.linear(self.undecorrelated_state, self.weight)
-        return self.decorrelated_state
+        return self.decorrelated_state.view(init_shape)
 
     def update_grads(self, _) -> None:
         assert self.decorrelated_state is not None, "Call forward() first"
@@ -62,9 +64,9 @@ class DecorLinear(torch.nn.Module):
                 (torch.mean(self.undecorrelated_state**2))
             ) / torch.sqrt((torch.mean(self.decorrelated_state**2)) + 1e-8)
 
-            self.weight.data *= normalizer
-            
             w_grads = corr @ self.weight.data
+
+            self.weight.data *= normalizer
 
         elif self.decorrelation_method == "foldiak":
             w_grads = -corr
@@ -92,6 +94,93 @@ class HalfBatchDecorLinear(DecorLinear):
         self.undecorrelated_state = self.undecorrelated_state[:half_batch_width]
         self.decorrelated_state = self.decorrelated_state[:half_batch_width]
         return output
+
+
+class ConvDecor(torch.nn.Module):
+    def __init__(
+        self,
+        in_shape: tuple,
+        kernel_size: int,
+        stride: int,
+        padding: int,
+        decorrelation_method: str = "copi",
+        device=None,
+        dtype=None,
+    ) -> None:
+        # Assumes padding of zero and stride of 1
+        super().__init__()
+        assert len(in_shape) == 3, "ConvDecor only supports 3D inputs, (C, H, W)"
+        assert decorrelation_method in ["scaled", "foldiak"]
+        factory_kwargs = {"device": device, "dtype": dtype}
+
+        self.in_shape = in_shape
+        self.kernel_size = kernel_size
+        self.matmulshape = in_shape[0] * kernel_size * kernel_size
+
+        self.conv = torch.nn.Conv2d(
+            in_shape[0],  # input channels
+            self.matmulshape,  # output channels
+            kernel_size=kernel_size,
+            stride=stride,
+            padding=padding,
+            bias=False,
+            **factory_kwargs,
+        )
+
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        eye = torch.eye(self.matmulshape)
+        self.conv.weight.data = eye.view(
+            self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
+        ).to(self.conv.weight.device)
+
+    def forward(self, input: torch.Tensor) -> torch.Tensor:
+        input = input.view(-1, *self.in_shape)
+        self.undecorrelated_state = input
+        self.decorrelated_state = self.conv(input)
+        return self.decorrelated_state
+
+    def update_grads(self, _) -> None:
+        assert self.decorrelated_state is not None, "Call forward() first"
+        assert self.undecorrelated_state is not None, "Call forward() first"
+
+        self.decorrelated_state = torch.permute(self.decorrelated_state, (0, 2, 3, 1))
+
+        self.decorrelated_state = self.decorrelated_state.view(-1, *self.matmulshape)
+
+        # The off-diagonal correlation = (1/batch_size)*(x.T @ x)*(1.0 - I)
+        corr = (1 / len(self.decorrelated_state)) * (
+            self.decorrelated_state.transpose(0, 1) @ self.decorrelated_state
+        )
+
+        if self.decorrelation_method == "copi":
+            off_diag_corr = corr * (1.0 - self.eye)
+            w_grads = off_diag_corr @ self.weight.data
+        elif self.decorrelation_method == "scaled":
+            normalizer = torch.sqrt(
+                (torch.mean(self.undecorrelated_state**2))
+            ) / torch.sqrt((torch.mean(self.decorrelated_state**2)) + 1e-8)
+
+            w_grads = corr @ self.weight.data.view(self.matmulshape, self.matmulshape)
+
+            self.weight.data *= normalizer
+
+        # Zero-ing the decorrelated state so that it cannot be re-used
+        self.undecorrelated_state = None
+        self.decorrelated_state = None
+
+        # Update grads of decorrelation matrix
+        self.weight.grad = w_grads.view(
+            self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
+        )
+
+    def get_fwd_params(self):
+        return []
+
+    def get_decor_params(self):
+        params = [self.conv.weight]
+        return params
 
 
 class MultiDecor(torch.nn.Module):
@@ -127,17 +216,27 @@ class MultiDecor(torch.nn.Module):
     def forward(self, input: torch.Tensor) -> torch.Tensor:
         input = input.view(-1, *self.in_shape)
         init_shape = input.shape
-        input = input.reshape(init_shape[0] * self.channel_dim, self.image_dim)
-        decor_input = self.image_decor.forward(input)
-        decor_input = decor_input.reshape(init_shape)
-        decor_input = decor_input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim)
-        decor_input = self.channel_decor.forward(decor_input)
-        decor_input = decor_input.reshape(
-            init_shape[0], init_shape[2], init_shape[3], -1
+        input = input.view(init_shape[0] * self.channel_dim, self.image_dim)
+        input = self.image_decor.forward(input)
+        input = input.view(init_shape)
+
+        input = input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim).contiguous()
+        input = self.channel_decor.forward(input)
+        input = input.view(init_shape[0], init_shape[2], init_shape[3], init_shape[1])
+        input = input.permute(0, 3, 1, 2).contiguous()
+
+        image_renorm = torch.sqrt(
+            torch.sum(self.image_decor.decorrelated_state**2) / torch.sum(input**2)
         )
-        decor_input = decor_input.permute(0, 3, 1, 2)
-        decor_input = decor_input.contiguous().view(init_shape)
-        return decor_input
+
+        self.image_decor.decorrelated_state = (
+            image_renorm
+            * input.clone().view(init_shape[0] * self.channel_dim, self.image_dim)[
+                : init_shape[0]
+            ]
+        )
+
+        return input
 
     # Define a function to take the input and run the channel decor forward
     def channel_decor_forward(self, input: torch.Tensor) -> torch.Tensor:

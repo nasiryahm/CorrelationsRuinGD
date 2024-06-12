@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from decor import DecorLinear, HalfBatchDecorLinear, MultiDecor
+from decor import DecorLinear, HalfBatchDecorLinear, MultiDecor, ConvDecor
 from fa import FALinear, FAConv2d
 from np import NPLinear
 from bp import BPLinear, BPConv2d
@@ -207,42 +207,64 @@ class DecorConvNet(torch.nn.Module):
         self.in_shape = in_size  # This is a shape for 3D input
         current_shape = in_size
         padding = 0
-        stride = 1
+        stride = 2
         for i in range(n_hidden_layers):
             in_dim = 3 if i == 0 else hidden_size
             out_dim = hidden_size
-            kernel_size = 5
+            kernel_size = 4
 
             if decorrelation_method is not None:
                 self.layers.append(
-                    MultiDecor(
+                    ConvDecor(
                         current_shape,
+                        kernel_size,
+                        stride,
+                        padding,
                         decorrelation_method=decorrelation_method,
                         **decor_layer_kwargs,
                     )
                 )
 
-            self.layers.append(
-                conv_layer_type(
-                    in_dim,
-                    out_dim,
-                    [kernel_size, kernel_size],
-                    padding=padding,
-                    stride=stride,
-                    **layer_kwargs,
+                self.layers.append(
+                    conv_layer_type(
+                        current_shape[0] * kernel_size * kernel_size,
+                        out_dim,
+                        [1, 1],
+                        padding=0,
+                        stride=1,
+                        **layer_kwargs,
+                    )
                 )
-            )
+            else:
+                self.layers.append(
+                    conv_layer_type(
+                        in_dim,
+                        out_dim,
+                        [kernel_size, kernel_size],
+                        padding=padding,
+                        stride=stride,
+                        **layer_kwargs,
+                    )
+                )
 
             current_shape = [
                 out_dim,
-                int((current_shape[1] - kernel_size + 2 * padding) / stride + 1),
-                int((current_shape[2] - kernel_size + 2 * padding) / stride + 1),
+                int(((current_shape[1] - kernel_size + 2 * padding) / stride + 1)),
+                int(((current_shape[2] - kernel_size + 2 * padding) / stride + 1)),
             ]
 
         if decorrelation_method is not None:
+            # self.layers.append(
+            #     MultiDecor(
+            #         current_shape,
+            #         decorrelation_method=decorrelation_method,
+            #         **decor_layer_kwargs,
+            #     )
+            # )
             self.layers.append(
-                MultiDecor(
-                    current_shape,
+                DecorLinear(
+                    int(np.prod(current_shape)),
+                    int(np.prod(current_shape)),
                     decorrelation_method=decorrelation_method,
                     **decor_layer_kwargs,
                 )
@@ -286,7 +308,9 @@ class DecorConvNet(torch.nn.Module):
                 x = x.view(x.size(0), -1)
             x = layer(x)
             if (indx + 1) < len(self.layers) and (
-                not isinstance(layer, MultiDecor) or not isinstance(layer, DecorLinear)
+                not isinstance(layer, ConvDecor)
+                and not isinstance(layer, DecorLinear)
+                and not isinstance(layer, MultiDecor)
             ):
                 x = self.activation_function(x)
         return x
@@ -315,11 +339,13 @@ class DecorConvNet(torch.nn.Module):
     def get_fwd_params(self):
         params = []
         for layer in self.layers:
-            params.extend(layer.get_fwd_params())
+            if hasattr(layer, "get_fwd_params"):
+                params.extend(layer.get_fwd_params())
         return params
 
     def get_decor_params(self):
         params = []
         for layer in self.layers:
-            params.extend(layer.get_decor_params())
+            if hasattr(layer, "get_decor_params"):
+                params.extend(layer.get_decor_params())
         return params

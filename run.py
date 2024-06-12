@@ -66,7 +66,8 @@ def train_network(
         in_size = 32 * 32 * 3
         out_size = 100
     if tv_dataset == "TIN":
-        in_size = 64 * 64 * 3
+        # After cropping
+        in_size = 56 * 56 * 3
         out_size = 200
 
     # Initialize model
@@ -85,7 +86,8 @@ def train_network(
         }
     if layer_type in [BPConv2d, FAConv2d]:
         model_type = DecorConvNet
-        in_size = [3, 64, 64]
+        # TIN After cropping
+        in_size = [3, 56, 56]
         if dataset in ["CIFAR10", "CIFAR100"]:
             in_size = [3, 32, 32]
         if dataset == "MNIST":
@@ -115,6 +117,7 @@ def train_network(
             betas=betas,
             eps=eps,
             lr=fwd_lr,
+            weight_decay=regularizer_strength,
         )
     elif optimizer_type == "SGD":
         fwd_optimizer = torch.optim.SGD(
@@ -148,6 +151,7 @@ def train_network(
             e,
             loud=loud,
             wandb=wandb,
+            top5=(dataset == "TIN"),
         )
         metrics = update_metrics(
             model,
@@ -159,6 +163,7 @@ def train_network(
             e,
             loud=loud,
             wandb=wandb,
+            top5=(dataset == "TIN"),
         )
         if e < nb_epochs:
             train(model, device, train_loader, optimizers, e, loss_func, loud=False)

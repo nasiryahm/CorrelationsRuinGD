@@ -143,16 +143,12 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
 
     # Extracting a validation, rather than test, set
     # Last 10K samples taken as test
-    if validation and not (dataset_importer == "tinyimagenet"):
+    if validation:
         x_test = x_train[-10000:]
         y_test = y_train[-10000:]
 
-        x_train = x_train[:50000]
-        y_train = y_train[:50000]
-
-    # # Picking only 1000 samples for training
-    # x_train = x_train[:1000]
-    # y_train = y_train[:1000]
+        x_train = x_train[: len(x_test)]
+        y_train = y_train[: len(y_test)]
 
     # Squeezing out any excess dimension in the labels (true for CIFAR10/100)
     y_train = np.squeeze(y_train)
@@ -232,10 +228,9 @@ def construct_dataloaders(
     train_transforms, test_transforms = None, None
     if tv_dataset == "TIN":
         train_transforms = v2.Compose(
-            [
-                v2.RandomHorizontalFlip(p=0.5),
-            ]
+            [v2.RandomHorizontalFlip(p=0.5), v2.RandomCrop(56)]
         )
+        test_transforms = v2.Compose([v2.CenterCrop(56)])
 
     x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
         tv_dataset, device, torch.float32, validation=False, mean=mean, std=std
@@ -254,16 +249,23 @@ def construct_dataloaders(
     return train_loader, test_loader
 
 
-def test(model, device, train_test, test_loader, loud, loss_func):
+def test(model, device, train_test, test_loader, loud, loss_func, top5=False):
     model.eval()
     test_loss = 0
     correct = 0
+    if top5:
+        top5_correct = 0
     with torch.no_grad():
         for data, target, onehots in test_loader:
             loss, output = model.test_step(data, target, onehots, loss_func)
             test_loss += loss
             pred = output.argmax(dim=1, keepdim=True)
             correct += pred.eq(target.view_as(pred)).sum().item()
+            if top5:
+                _, top5_pred = output.topk(5, dim=1, largest=True, sorted=True)
+                top5_correct += (
+                    top5_pred.eq(target.view(-1, 1).expand_as(top5_pred)).sum().item()
+                )
 
     test_loss /= len(test_loader.dataset)
     if loud:
@@ -276,18 +278,42 @@ def test(model, device, train_test, test_loader, loud, loss_func):
                 100.0 * correct / len(test_loader.dataset),
             )
         )
+
+    if top5:
+        return (
+            test_loss,
+            (
+                (100.0 * correct / len(test_loader.dataset)),
+                (100.0 * top5_correct / len(test_loader.dataset)),
+            ),
+        )
     return test_loss, (100.0 * correct / len(test_loader.dataset))
 
 
 def update_metrics(
-    model, metrics, device, train_test, loader, loss_func, epoch, loud=False, wandb=None
+    model,
+    metrics,
+    device,
+    train_test,
+    loader,
+    loss_func,
+    epoch,
+    loud=False,
+    wandb=None,
+    top5=False,
 ):
-    loss, acc = test(model, device, train_test, loader, loud, loss_func)
+    loss, acc = test(model, device, train_test, loader, loud, loss_func, top5)
     metrics[train_test]["loss"].append(loss)
     metrics[train_test]["acc"].append(acc)
 
     if wandb is not None:
-        wandb.log({f"{train_test}/loss": loss, f"{train_test}/acc": acc}, step=epoch)
+        wandb.log({f"{train_test}/loss": loss}, step=epoch)
+        if top5:
+            wandb.log(
+                {f"{train_test}/top5": acc[1], f"{train_test}/acc": acc[0]}, step=epoch
+            )
+        else:
+            wandb.log({f"{train_test}/acc": acc}, step=epoch)
 
     return metrics
 

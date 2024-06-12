@@ -1,0 +1,81 @@
+command:
+  - ${env}
+  - python
+  - ${program}
+  - ${args_no_hyphens}
+program: run.py
+method: grid
+metric:
+  goal: minimize
+  name: train/loss
+
+parameters:
+  batch_size:
+    value: 256
+  dataset:
+    values:
+    # - CIFAR10
+    # - CIFAR100
+    - TIN
+  device:
+    value: cuda:0
+  bias:
+    value: True
+  layer_type:
+    values:
+      - BPConv
+      # - FAConv
+      # - NP
+  decorrelation_method:
+    value: None
+    # values:
+    #   - copi
+    #   - scaled
+  regularizer_strength: 
+    value: 0.0
+    # - 0.0001
+    # values:
+    #   - 0.2
+    #   - 0.4
+    #   - 0.6
+    #   - 0.8
+    #   - 0.9
+      # - 0.6
+      # - 0.8
+      # - 0.9
+  decor_lr:
+    value: 0.0
+    # values:
+    #  - 0.001
+    #  - 0.0001
+    #  - 0.00001
+    #  - 0.000001
+    #  - 0.0000001
+  fwd_lr:
+    values:
+      #  - 0.1
+       - 0.01
+       - 0.001
+       - 0.0001
+       - 0.00001
+      #  - 0.000001
+  n_hidden_layers:
+    value: 3
+  hidden_layer_size:
+    value: 16
+  loss_func_type:
+    value: CCE
+  optimizer_type:
+    value: Adam
+  seed:
+    value: 42
+    # values:
+    #   - 42
+    #   - 43
+    #   - 44
+    #   - 45
+    #   - 46
+  nb_epochs:
+    value: 10
+  wandb.mode:
+    value: online
