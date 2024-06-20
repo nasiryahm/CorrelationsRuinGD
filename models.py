@@ -201,7 +201,7 @@ class DecorConvNet(torch.nn.Module):
 
         assert n_hidden_layers > 0, "Need at least one hidden layer"
         conv_layer_type = layer_type
-        assert conv_layer_type in [BPConv2d, FAConv2d], "Only BPConv2d supported"
+        assert conv_layer_type in [BPConv2d, FAConv2d]
         dense_layer_type = BPLinear if layer_type == BPConv2d else FALinear
 
         self.in_shape = in_size  # This is a shape for 3D input
@@ -211,7 +211,7 @@ class DecorConvNet(torch.nn.Module):
         for i in range(n_hidden_layers):
             in_dim = 3 if i == 0 else hidden_size
             out_dim = hidden_size
-            kernel_size = 4
+            kernel_size = 5
 
             if decorrelation_method is not None:
                 self.layers.append(
@@ -254,13 +254,6 @@ class DecorConvNet(torch.nn.Module):
             ]
 
         if decorrelation_method is not None:
-            # self.layers.append(
-            #     MultiDecor(
-            #         current_shape,
-            #         decorrelation_method=decorrelation_method,
-            #         **decor_layer_kwargs,
-            #     )
-            # )
             self.layers.append(
                 DecorLinear(
                     int(np.prod(current_shape)),
@@ -308,9 +301,11 @@ class DecorConvNet(torch.nn.Module):
                 x = x.view(x.size(0), -1)
             x = layer(x)
             if (indx + 1) < len(self.layers) and (
-                not isinstance(layer, ConvDecor)
-                and not isinstance(layer, DecorLinear)
-                and not isinstance(layer, MultiDecor)
+                not (
+                    isinstance(layer, ConvDecor)
+                    or isinstance(layer, DecorLinear)
+                    or isinstance(layer, MultiDecor)
+                )
             ):
                 x = self.activation_function(x)
         return x
@@ -323,7 +318,7 @@ class DecorConvNet(torch.nn.Module):
         total_loss.backward()
         with torch.no_grad():
             for layer in self.layers:
-                if isinstance(layer, MultiDecor) or isinstance(layer, DecorLinear):
+                if hasattr(layer, "update_grads"):
                     layer.update_grads(None)
 
         return total_loss

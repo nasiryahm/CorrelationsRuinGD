@@ -71,12 +71,13 @@ class DecorLinear(torch.nn.Module):
         elif self.decorrelation_method == "foldiak":
             w_grads = -corr
 
+        # Update grads of decorrelation matrix
+        self.weight.grad = w_grads
+
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
         self.decorrelated_state = None
 
-        # Update grads of decorrelation matrix
-        self.weight.grad = w_grads
 
     def get_fwd_params(self):
         return []
@@ -116,6 +117,7 @@ class ConvDecor(torch.nn.Module):
         self.in_shape = in_shape
         self.kernel_size = kernel_size
         self.matmulshape = in_shape[0] * kernel_size * kernel_size
+        self.decorrelation_method = decorrelation_method
 
         self.conv = torch.nn.Conv2d(
             in_shape[0],  # input channels
@@ -145,9 +147,13 @@ class ConvDecor(torch.nn.Module):
         assert self.decorrelated_state is not None, "Call forward() first"
         assert self.undecorrelated_state is not None, "Call forward() first"
 
-        self.decorrelated_state = torch.permute(self.decorrelated_state, (0, 2, 3, 1))
+        single_patch = self.decorrelated_state[:,:,0,0]
 
-        self.decorrelated_state = self.decorrelated_state.view(-1, *self.matmulshape)
+        self.decorrelated_state = torch.permute(
+            self.decorrelated_state, (0, 2, 3, 1)
+        ).contiguous()
+
+        self.decorrelated_state = self.decorrelated_state.reshape(-1, self.matmulshape)
 
         # The off-diagonal correlation = (1/batch_size)*(x.T @ x)*(1.0 - I)
         corr = (1 / len(self.decorrelated_state)) * (
@@ -159,21 +165,30 @@ class ConvDecor(torch.nn.Module):
             w_grads = off_diag_corr @ self.weight.data
         elif self.decorrelation_method == "scaled":
             normalizer = torch.sqrt(
-                (torch.mean(self.undecorrelated_state**2))
-            ) / torch.sqrt((torch.mean(self.decorrelated_state**2)) + 1e-8)
+                (
+                    torch.mean(
+                        self.undecorrelated_state[
+                            :, :, : self.kernel_size, : self.kernel_size
+                        ]
+                        ** 2
+                    )
+                )
+            ) / torch.sqrt((torch.mean(single_patch ** 2)) + 1e-8)
 
-            w_grads = corr @ self.weight.data.view(self.matmulshape, self.matmulshape)
+            self.conv.weight.data *= normalizer
 
-            self.weight.data *= normalizer
+            w_grads = corr @ self.conv.weight.data.reshape(
+                self.matmulshape, self.matmulshape
+            )
+
+        # Update grads of decorrelation matrix
+        self.conv.weight.grad = w_grads.reshape(
+            self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
+        )
 
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
         self.decorrelated_state = None
-
-        # Update grads of decorrelation matrix
-        self.weight.grad = w_grads.view(
-            self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
-        )
 
     def get_fwd_params(self):
         return []

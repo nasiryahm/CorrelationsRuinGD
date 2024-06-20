@@ -13,6 +13,7 @@ from np import NPLinear
 import wandb
 import hydra
 from omegaconf import OmegaConf, DictConfig
+import random
 
 
 def train_network(
@@ -43,6 +44,7 @@ def train_network(
     # Initializing random seeding
     torch.manual_seed(seed)
     np.random.seed(seed)
+    random.seed(seed)
 
     # Load dataset
     tv_dataset = dataset
@@ -188,6 +190,9 @@ def run(config: DictConfig) -> None:
     )
 
     if config.decorrelation_method == "None":
+        config.decorrelation_method = None
+
+    if config.decor_lr == 0:
         config.decorrelation_method = None
 
     # For now foldiak is too slow unfortunately
