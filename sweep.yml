@@ -3,79 +3,71 @@ command:
   - python
   - ${program}
   - ${args_no_hyphens}
-program: run.py
 method: grid
 metric:
   goal: minimize
   name: train/loss
-
 parameters:
+  validation:
+    value: True
   batch_size:
     value: 256
+  bias:
+    value: true
   dataset:
     values:
-    # - CIFAR10
-    # - CIFAR100
-    - TIN
+      # - MNIST
+      - CIFAR10
+      - CIFAR100
+  decor_lr:
+    values:
+      # - 0.0 
+      # - 0.1
+      # - 0.01
+      # - 1e-03
+      - 1e-04
+      - 1e-05
+      - 1e-06
+      - 1e-07
+      - 1e-08
+      # - 1e-09
+  decorrelation_method:
+    value: scaled
   device:
     value: cuda:0
-  bias:
-    value: True
-  layer_type:
-    values:
-      - BPConv
-      # - FAConv
-      # - NP
-  decorrelation_method:
-    value: None
-    # values:
-    #   - copi
-    #   - scaled
-  regularizer_strength: 
-    value: 0.0
-    # - 0.0001
-    # values:
-    #   - 0.2
-    #   - 0.4
-    #   - 0.6
-    #   - 0.8
-    #   - 0.9
-      # - 0.6
-      # - 0.8
-      # - 0.9
-  decor_lr:
-    value: 0.0
-    # values:
-    #  - 0.001
-    #  - 0.0001
-    #  - 0.00001
-    #  - 0.000001
-    #  - 0.0000001
   fwd_lr:
     values:
-      #  - 0.1
-       - 0.01
-       - 0.001
-       - 0.0001
-       - 0.00001
-      #  - 0.000001
-  n_hidden_layers:
-    value: 3
+      # - 0.1
+      - 0.01
+      - 0.001
+      - 0.0001
+      - 1e-05
+      - 1e-06
   hidden_layer_size:
-    value: 16
+    value: 1000
+  layer_type:
+    values:
+      # - BP
+      - NP
+      # - FA
+      # - DFA
   loss_func_type:
     value: CCE
+  n_hidden_layers:
+    value: 4
+  nb_epochs:
+    value: 100
   optimizer_type:
     value: Adam
+  regularizer_strength:
+    value: 0
   seed:
-    value: 42
-    # values:
-    #   - 42
-    #   - 43
-    #   - 44
-    #   - 45
-    #   - 46
-  nb_epochs:
-    value: 10
+    values:
+      - 42
+      # - 43
+      # - 44
+      # - 45
+      # - 46
   wandb.mode:
     value: online
+program: run.py

@@ -2,13 +2,13 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from decor import DecorLinear, HalfBatchDecorLinear, MultiDecor, ConvDecor
+from decor import DecorLinear, HalfBatchDecorLinear, MultiDecor, DecorConv
 from fa import FALinear, FAConv2d
 from np import NPLinear
 from bp import BPLinear, BPConv2d
 
 
-class DecorNet(torch.nn.Module):
+class Net(torch.nn.Module):
     def __init__(
         self,
         in_size=28 * 28,
@@ -20,9 +20,8 @@ class DecorNet(torch.nn.Module):
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
-        decor_layer_kwargs={},
     ):
-        super(DecorNet, self).__init__()
+        super(Net, self).__init__()
         self.layers = []
         self.decorrelation = decorrelation_method is None
 
@@ -33,19 +32,22 @@ class DecorNet(torch.nn.Module):
                 self.layers.append(
                     DecorLinear(
                         in_dim,
-                        in_dim,
+                        out_dim,
                         decorrelation_method=decorrelation_method,
-                        **decor_layer_kwargs,
+                        bias=biases,
+                        fwd_layer=layer_type,
+                        **layer_kwargs,
                     )
                 )
-            self.layers.append(
-                layer_type(
-                    in_dim,
-                    out_dim,
-                    bias=biases,
-                    **layer_kwargs,
+            else:
+                self.layers.append(
+                    layer_type(
+                        in_dim,
+                        out_dim,
+                        bias=biases,
+                        **layer_kwargs,
+                    )
                 )
-            )
 
         self.activation_function = activation_function
         self.layers = torch.nn.ModuleList(self.layers)
@@ -56,8 +58,8 @@ class DecorNet(torch.nn.Module):
             x = x.view(x.size(0), -1)
         for indx, layer in enumerate(self.layers):
             x = layer(x)
-            # TODO: Don't activation func if decor
-            if (indx + 1) < len(self.layers) and not isinstance(layer, DecorLinear):
+            # No need for activation function on final output
+            if (indx + 1) < len(self.layers):
                 x = self.activation_function(x)
         return x
 
@@ -107,7 +109,6 @@ class PerturbNet(torch.nn.Module):
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
-        decor_layer_kwargs={},
     ):
         super(PerturbNet, self).__init__()
         self.layers = []
@@ -121,12 +122,17 @@ class PerturbNet(torch.nn.Module):
                 self.layers.append(
                     HalfBatchDecorLinear(
                         in_dim,
-                        in_dim,
+                        out_dim,
                         decorrelation_method=decorrelation_method,
-                        **decor_layer_kwargs,
+                        bias=biases,
+                        fwd_layer=layer_type,
+                        **layer_kwargs,
                     )
                 )
-            self.layers.append(layer_type(in_dim, out_dim, bias=biases, **layer_kwargs))
+            else:
+                self.layers.append(
+                    layer_type(in_dim, out_dim, bias=biases, **layer_kwargs)
+                )
 
         self.activation_function = activation_function
         self.layers = torch.nn.ModuleList(self.layers)
@@ -137,9 +143,8 @@ class PerturbNet(torch.nn.Module):
             x = x.view(x.size(0), -1)
         for indx, layer in enumerate(self.layers):
             x = layer(x)
-            if (indx + 1) < len(self.layers) and not isinstance(
-                layer, HalfBatchDecorLinear
-            ):
+            # No need for activation function on final output
+            if (indx + 1) < len(self.layers):
                 x = self.activation_function(x)
         return x
 
@@ -182,7 +187,7 @@ class PerturbNet(torch.nn.Module):
         return params
 
 
-class DecorConvNet(torch.nn.Module):
+class ConvNet(torch.nn.Module):
     def __init__(
         self,
         in_size,
@@ -194,9 +199,8 @@ class DecorConvNet(torch.nn.Module):
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
-        decor_layer_kwargs={},
     ):
-        super(DecorConvNet, self).__init__()
+        super(ConvNet, self).__init__()
         self.layers = []
 
         assert n_hidden_layers > 0, "Need at least one hidden layer"
@@ -206,35 +210,28 @@ class DecorConvNet(torch.nn.Module):
 
         self.in_shape = in_size  # This is a shape for 3D input
         current_shape = in_size
-        padding = 0
+        padding = 0  # Fixing padding and stride
         stride = 2
         for i in range(n_hidden_layers):
             in_dim = 3 if i == 0 else hidden_size
-            out_dim = hidden_size
+            out_dim = hidden_size  # Fixed output channel size
             kernel_size = 5
 
             if decorrelation_method is not None:
                 self.layers.append(
-                    ConvDecor(
+                    DecorConv(
                         current_shape,
+                        out_dim,
                         kernel_size,
                         stride,
                         padding,
                         decorrelation_method=decorrelation_method,
-                        **decor_layer_kwargs,
-                    )
-                )
-
-                self.layers.append(
-                    conv_layer_type(
-                        current_shape[0] * kernel_size * kernel_size,
-                        out_dim,
-                        [1, 1],
-                        padding=0,
-                        stride=1,
+                        conv_layer=conv_layer_type,
+                        bias=biases,
                         **layer_kwargs,
                     )
                 )
+
             else:
                 self.layers.append(
                     conv_layer_type(
@@ -243,6 +240,7 @@ class DecorConvNet(torch.nn.Module):
                         [kernel_size, kernel_size],
                         padding=padding,
                         stride=stride,
+                        bias=biases,
                         **layer_kwargs,
                     )
                 )
@@ -253,43 +251,44 @@ class DecorConvNet(torch.nn.Module):
                 int(((current_shape[2] - kernel_size + 2 * padding) / stride + 1)),
             ]
 
+        # Adding one dense layer before output
         if decorrelation_method is not None:
             self.layers.append(
                 DecorLinear(
                     int(np.prod(current_shape)),
-                    int(np.prod(current_shape)),
+                    1000,
                     decorrelation_method=decorrelation_method,
-                    **decor_layer_kwargs,
+                    fwd_layer=dense_layer_type,
+                    bias=biases**layer_kwargs,
                 )
             )
 
-        self.layers.append(
-            dense_layer_type(
-                int(np.prod(current_shape)),
-                1024,
-                bias=biases,
-                **layer_kwargs,
-            )
-        )
-
-        if decorrelation_method is not None:
             self.layers.append(
                 DecorLinear(
-                    1024,
-                    1024,
+                    1000,
+                    out_size,
                     decorrelation_method=decorrelation_method,
-                    **decor_layer_kwargs,
+                    **layer_kwargs,
+                )
+            )
+        else:
+            self.layers.append(
+                dense_layer_type(
+                    int(np.prod(current_shape)),
+                    1000,
+                    bias=biases,
+                    **layer_kwargs,
                 )
             )
 
-        self.layers.append(
-            dense_layer_type(
-                1024,
-                out_size,
-                bias=biases,
-                **layer_kwargs,
+            self.layers.append(
+                dense_layer_type(
+                    1000,
+                    out_size,
+                    bias=biases,
+                    **layer_kwargs,
+                )
             )
-        )
 
         self.activation_function = activation_function
         self.layers = torch.nn.ModuleList(self.layers)
@@ -300,13 +299,7 @@ class DecorConvNet(torch.nn.Module):
             if isinstance(layer, BPLinear) or isinstance(layer, FALinear):
                 x = x.view(x.size(0), -1)
             x = layer(x)
-            if (indx + 1) < len(self.layers) and (
-                not (
-                    isinstance(layer, ConvDecor)
-                    or isinstance(layer, DecorLinear)
-                    or isinstance(layer, MultiDecor)
-                )
-            ):
+            if (indx + 1) < len(self.layers):
                 x = self.activation_function(x)
         return x
 

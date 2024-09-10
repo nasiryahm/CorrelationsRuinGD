@@ -68,9 +68,7 @@ class NPLinear(torch.nn.Linear):
 
         self.clean_input = input[:half_batch_width]
         self.output_diff = -noise[half_batch_width:]
-        self.square_norm = torch.sum(
-            self.output_diff.reshape(half_batch_width, -1) ** 2, axis=1
-        )
+
         return output
 
     def update_grads(self, scaling_factor) -> None:

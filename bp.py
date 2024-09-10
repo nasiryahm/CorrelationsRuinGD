@@ -16,6 +16,9 @@ class BPLinear(torch.nn.Linear):
     def get_decor_params(self):
         return []
 
+    def update_grads(self, _):
+        pass
+
 
 class BPConv2d(torch.nn.Conv2d):
     """BP Conv2d layer"""
@@ -31,3 +34,6 @@ class BPConv2d(torch.nn.Conv2d):
 
     def get_decor_params(self):
         return []
+
+    def update_grads(self, _):
+        pass

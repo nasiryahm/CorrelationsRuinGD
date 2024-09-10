@@ -5,7 +5,7 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from utils import *
-from models import DecorNet, DecorConvNet, PerturbNet
+from models import Net, ConvNet, PerturbNet
 from bp import BPLinear, BPConv2d
 from decor import DecorLinear
 from fa import FALinear, FAConv2d
@@ -28,14 +28,14 @@ def train_network(
     hidden_layer_size=1000,
     layer_type=BPLinear,
     loss_func_type="CCE",  # "MSE"
+    activation_function=torch.nn.LeakyReLU(),
     optimizer_type="Adam",
     fwd_lr=1e-2,
     seed=42,
     nb_epochs=10,
     loud=True,
-    layer_kwargs={},
-    decor_layer_kwargs={},
     wandb=None,
+    validation=False,
 ):
 
     betas = [0.9, 0.9999]
@@ -56,7 +56,7 @@ def train_network(
         tv_dataset = torchvision.datasets.CIFAR100
 
     train_loader, test_loader = construct_dataloaders(
-        tv_dataset, batch_size=batch_size, device=device
+        tv_dataset, batch_size=batch_size, validation=validation, device=device
     )
 
     # If dataset is CIFAR, change input shape
@@ -73,8 +73,9 @@ def train_network(
         out_size = 200
 
     # Initialize model
+    layer_kwargs = {}
     if layer_type in [BPLinear, FALinear]:
-        model_type = DecorNet
+        model_type = Net
     if layer_type in [NPLinear]:
         model_type = PerturbNet
         distribution = torch.distributions.Normal(
@@ -87,7 +88,7 @@ def train_network(
             "dist_sampler": dist_sampler,
         }
     if layer_type in [BPConv2d, FAConv2d]:
-        model_type = DecorConvNet
+        model_type = ConvNet
         # TIN After cropping
         in_size = [3, 56, 56]
         if dataset in ["CIFAR10", "CIFAR100"]:
@@ -103,13 +104,13 @@ def train_network(
         layer_type=layer_type,
         decorrelation_method=decorrelation_method,
         biases=bias,
+        activation_function=activation_function,
         layer_kwargs=layer_kwargs,
-        decor_layer_kwargs=decor_layer_kwargs,
     )
     model.to(device)
 
     # Initialize metric storage
-    metrics = init_metric()
+    metrics = init_metric(validation=validation)
 
     # Define optimizers
     fwd_optimizer = None
@@ -125,8 +126,8 @@ def train_network(
         fwd_optimizer = torch.optim.SGD(
             model.get_fwd_params(), lr=fwd_lr, weight_decay=regularizer_strength
         )
-
     optimizers = [fwd_optimizer]
+
     if decorrelation_method is not None:
         decor_optimizer = torch.optim.SGD(model.get_decor_params(), lr=decor_lr)
         optimizers.append(decor_optimizer)
@@ -142,6 +143,9 @@ def train_network(
         )
 
     # Train loop
+    test_val = "test"
+    if validation:
+        test_val = "val"
     for e in tqdm(range(nb_epochs + 1), disable=not loud):
         metrics = update_metrics(
             model,
@@ -159,7 +163,7 @@ def train_network(
             model,
             metrics,
             device,
-            "test",
+            test_val,
             test_loader,
             loss_func,
             e,
@@ -169,7 +173,7 @@ def train_network(
         )
         if e < nb_epochs:
             train(model, device, train_loader, optimizers, e, loss_func, loud=False)
-        if np.isnan(metrics["test"]["loss"][-1]) or np.isnan(
+        if np.isnan(metrics[test_val]["loss"][-1]) or np.isnan(
             metrics["train"]["loss"][-1]
         ):
             print("NaN detected, aborting training")
@@ -203,18 +207,24 @@ def run(config: DictConfig) -> None:
     assert config.layer_type in [
         "BP",
         "FA",
+        "DFA",
         "NP",
         "BPConv",
         "FAConv",
+        "DFAConv",
     ], "Invalid layer type"
-    if config.layer_type == "FA":
+    if config.layer_type in ["FA", "DFA"]:
         layer_type = FALinear
     elif config.layer_type == "NP":
         layer_type = NPLinear
     elif config.layer_type == "BPConv":
         layer_type = BPConv2d
-    elif config.layer_type == "FAConv":
+    elif config.layer_type in ["FAConv", "DFAConv"]:
         layer_type = FAConv2d
+
+    act_func = torch.nn.LeakyReLU()
+    if config.layer_type == "DFA" or config.layer_type == "DFAConv":
+        act_func = ST_LeakyReLU()
 
     metrics = train_network(
         batch_size=config.batch_size,
@@ -228,12 +238,14 @@ def run(config: DictConfig) -> None:
         hidden_layer_size=config.hidden_layer_size,
         layer_type=layer_type,
         loss_func_type=config.loss_func_type,
+        activation_function=act_func,
         optimizer_type=config.optimizer_type,
         fwd_lr=config.fwd_lr,
         seed=config.seed,
         nb_epochs=config.nb_epochs,
         loud=config.loud,
         wandb=wandb,
+        validation=config.validation,
     )
 
     print(metrics)

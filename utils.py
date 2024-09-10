@@ -6,6 +6,26 @@ import os
 import numpy as np
 
 
+class F_ST_LeakyReLU(torch.autograd.Function):
+    @staticmethod
+    def forward(context, input, slope):
+        return F.leaky_relu(input, slope)
+
+    @staticmethod
+    def backward(context, grad_output):
+        return grad_output, None
+
+
+class ST_LeakyReLU(torch.nn.Module):
+    def __init__(self, slope=0.01, *args, **kwargs):
+        super(ST_LeakyReLU, self).__init__(*args, **kwargs)
+
+        self.slope = slope
+
+    def forward(self, input):
+        return F_ST_LeakyReLU.apply(input, self.slope)
+
+
 class ClassificationLoadedDataset(torch.utils.data.Dataset):
     """Classification Dataset in Memory"""
 
@@ -147,8 +167,8 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         x_test = x_train[-10000:]
         y_test = y_train[-10000:]
 
-        x_train = x_train[: len(x_test)]
-        y_train = y_train[: len(y_test)]
+        x_train = x_train[: len(x_train) - 10000]
+        y_train = y_train[: len(y_train) - 10000]
 
     # Squeezing out any excess dimension in the labels (true for CIFAR10/100)
     y_train = np.squeeze(y_train)
@@ -194,11 +214,10 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         x_train = x_train.reshape(-1, 3, 64, 64)
         x_test = x_test.reshape(-1, 3, 64, 64)
 
-        means = torch.tensor([0.485, 0.456, 0.406]).to(device)
-        stds = torch.tensor([0.229, 0.224, 0.225]).to(device)
-        x_train = (x_train - means[None, :, None, None]) / stds[None, :, None, None]
-        x_test = (x_test - means[None, :, None, None]) / stds[None, :, None, None]
-
+        means = torch.mean(x_train, axis=(0, 2, 3))[None, :, None, None]
+        stds = (torch.std(x_train, axis=(0, 2, 3)) + 1e-8)[None, :, None, None]
+        x_train = (x_train - means) / stds
+        x_test = (x_test - means) / stds
     if (
         dataset_importer == torchvision.datasets.CIFAR10
         or dataset_importer == torchvision.datasets.CIFAR100
@@ -206,11 +225,10 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         x_train = x_train.reshape(-1, 3, 32, 32)
         x_test = x_test.reshape(-1, 3, 32, 32)
 
-        means = torch.tensor([0.4914, 0.4822, 0.4465]).to(device)
-        stds = torch.tensor([0.2023, 0.1994, 0.2010]).to(device)
-
-        x_train = (x_train - means[None, :, None, None]) / stds[None, :, None, None]
-        x_test = (x_test - means[None, :, None, None]) / stds[None, :, None, None]
+        means = torch.mean(x_train, axis=(0, 2, 3))[None, :, None, None]
+        stds = (torch.std(x_train, axis=(0, 2, 3)) + 1e-8)[None, :, None, None]
+        x_train = (x_train - means) / stds
+        x_test = (x_test - means) / stds
 
     return x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot
 
@@ -220,6 +238,7 @@ def construct_dataloaders(
     batch_size=64,
     mean=None,
     std=None,
+    validation=False,
     device="cpu",
 ):
     train_kwargs = {"batch_size": batch_size, "num_workers": 0, "shuffle": True}
@@ -233,7 +252,7 @@ def construct_dataloaders(
         test_transforms = v2.Compose([v2.CenterCrop(56)])
 
     x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
-        tv_dataset, device, torch.float32, validation=False, mean=mean, std=std
+        tv_dataset, device, torch.float32, validation=validation, mean=mean, std=std
     )
 
     train_dataset = ClassificationLoadedDataset(
@@ -351,8 +370,11 @@ def train(
             )
 
 
-def init_metric():
-    return {"train": {"loss": [], "acc": []}, "test": {"loss": [], "acc": []}}
+def init_metric(validation=False):
+    if validation:
+        return {"train": {"loss": [], "acc": []}, "val": {"loss": [], "acc": []}}
+    else:
+        return {"train": {"loss": [], "acc": []}, "test": {"loss": [], "acc": []}}
 
 
 def plot_metrics(metrics):

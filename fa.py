@@ -58,6 +58,9 @@ class FALinear(torch.nn.Linear):
     def get_decor_params(self):
         return []
 
+    def update_grads(self, _):
+        pass
+
 
 class FAConv2dFunction(torch.autograd.Function):
 
@@ -138,3 +141,6 @@ class FAConv2d(torch.nn.Conv2d):
 
     def get_decor_params(self):
         return []
+
+    def update_grads(self, _):
+        pass
