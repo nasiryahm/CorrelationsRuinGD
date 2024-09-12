@@ -16,7 +16,7 @@ class Net(torch.nn.Module):
         hidden_size=1000,
         n_hidden_layers=0,
         layer_type=BPLinear,
-        activation_function=torch.nn.LeakyReLU(),
+        activation_function=torch.nn.LeakyReLU,
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
@@ -49,6 +49,10 @@ class Net(torch.nn.Module):
                     )
                 )
 
+            # add activation function
+            if (i + 1) < n_hidden_layers:
+                self.layers.append(activation_function())
+
         self.activation_function = activation_function
         self.layers = torch.nn.ModuleList(self.layers)
 
@@ -58,28 +62,28 @@ class Net(torch.nn.Module):
             x = x.view(x.size(0), -1)
         for indx, layer in enumerate(self.layers):
             x = layer(x)
-            # No need for activation function on final output
-            if (indx + 1) < len(self.layers):
-                x = self.activation_function(x)
+
         return x
 
     def train_step(self, data, target, onehots, loss_func):
+        self.train()
         # Duplicate data for network clean/noisy pass
         output = self(data)
         loss = loss_func(output[: len(data)], target, onehots)
-        total_loss = loss.sum()
+        total_loss = loss.mean()
         total_loss.backward()
         with torch.no_grad():
             for layer in self.layers:
-                if isinstance(layer, DecorLinear):
+                if hasattr(layer, "update_grads"):
                     layer.update_grads(None)
 
         return total_loss
 
     def test_step(self, data, target, onehots, loss_func):
+        self.eval()
         with torch.no_grad():
             output = self(data)
-            loss = torch.sum(
+            loss = torch.mean(
                 loss_func(output, target, onehots)
             ).item()  # sum up batch loss
             return loss, output
@@ -87,13 +91,15 @@ class Net(torch.nn.Module):
     def get_fwd_params(self):
         params = []
         for layer in self.layers:
-            params.extend(layer.get_fwd_params())
+            if hasattr(layer, "get_fwd_params"):
+                params.extend(layer.get_fwd_params())
         return params
 
     def get_decor_params(self):
         params = []
         for layer in self.layers:
-            params.extend(layer.get_decor_params())
+            if hasattr(layer, "get_decor_params"):
+                params.extend(layer.get_decor_params())
         return params
 
 
@@ -105,7 +111,7 @@ class PerturbNet(torch.nn.Module):
         hidden_size=1000,
         n_hidden_layers=0,
         layer_type=NPLinear,
-        activation_function=torch.nn.LeakyReLU(0.1),
+        activation_function=torch.nn.LeakyReLU,
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
@@ -134,7 +140,10 @@ class PerturbNet(torch.nn.Module):
                     layer_type(in_dim, out_dim, bias=biases, **layer_kwargs)
                 )
 
-        self.activation_function = activation_function
+            # add activation function
+            if (i + 1) < n_hidden_layers:
+                self.layers.append(activation_function())
+
         self.layers = torch.nn.ModuleList(self.layers)
 
     def forward(self, x):
@@ -143,12 +152,11 @@ class PerturbNet(torch.nn.Module):
             x = x.view(x.size(0), -1)
         for indx, layer in enumerate(self.layers):
             x = layer(x)
-            # No need for activation function on final output
-            if (indx + 1) < len(self.layers):
-                x = self.activation_function(x)
+
         return x
 
     def train_step(self, data, target, onehots, loss_func):
+        self.train()
         with torch.inference_mode():
             # Duplicate data for network clean/noisy pass
             output = self(torch.concatenate([data, data.clone()]))
@@ -159,17 +167,19 @@ class PerturbNet(torch.nn.Module):
                 output[len(data) :], target, onehots
             )  # sum up batch loss
             # Multiply grad by loss differential and normalize with unit norms
-            loss_differential = clean_loss - noisy_loss
+            loss_differential = (clean_loss - noisy_loss) / len(data)
             multiplication = loss_differential
             for layer in self.layers:
-                layer.update_grads(multiplication)
+                if hasattr(layer, "update_grads"):
+                    layer.update_grads(multiplication)
 
-            return clean_loss.sum()
+            return clean_loss.mean()
 
     def test_step(self, data, target, onehots, loss_func):
+        self.eval()
         with torch.inference_mode():
             output = self(torch.concatenate([data, data.clone()]))
-            loss = torch.sum(
+            loss = torch.mean(
                 loss_func(output[: len(data)], target, onehots)
             ).item()  # sum up batch loss
             return loss, output[: len(data)]
@@ -177,13 +187,15 @@ class PerturbNet(torch.nn.Module):
     def get_fwd_params(self):
         params = []
         for layer in self.layers:
-            params.extend(layer.get_fwd_params())
+            if hasattr(layer, "get_fwd_params"):
+                params.extend(layer.get_fwd_params())
         return params
 
     def get_decor_params(self):
         params = []
         for layer in self.layers:
-            params.extend(layer.get_decor_params())
+            if hasattr(layer, "get_decor_params"):
+                params.extend(layer.get_decor_params())
         return params
 
 
@@ -195,7 +207,7 @@ class ConvNet(torch.nn.Module):
         n_hidden_layers=0,
         out_size=10,
         layer_type=BPConv2d,
-        activation_function=torch.nn.LeakyReLU(),
+        activation_function=torch.nn.ReLU,
         biases=True,
         decorrelation_method="copi",
         layer_kwargs={},
@@ -210,12 +222,12 @@ class ConvNet(torch.nn.Module):
 
         self.in_shape = in_size  # This is a shape for 3D input
         current_shape = in_size
-        padding = 0  # Fixing padding and stride
-        stride = 2
+        padding = 1  # Fixing padding and stride
+        stride = 1
         for i in range(n_hidden_layers):
-            in_dim = 3 if i == 0 else hidden_size
-            out_dim = hidden_size  # Fixed output channel size
-            kernel_size = 5
+            in_dim = 3 if i == 0 else 32 * (2 ** (int((i - 1) / 2)))
+            out_dim = 32 * (2 ** (int(i / 2)))  # Fixed output channel size
+            kernel_size = 3
 
             if decorrelation_method is not None:
                 self.layers.append(
@@ -245,69 +257,97 @@ class ConvNet(torch.nn.Module):
                     )
                 )
 
+            # Add activation function
+            self.layers.append(activation_function())
+
             current_shape = [
                 out_dim,
                 int(((current_shape[1] - kernel_size + 2 * padding) / stride + 1)),
                 int(((current_shape[2] - kernel_size + 2 * padding) / stride + 1)),
             ]
 
+            if i != 0 and (i + 1) % 2 == 0:
+                # Adding a max pool between pair of convs
+                self.layers.append(torch.nn.MaxPool2d(kernel_size=2, stride=2))
+
+                # Max pool causes another reshape
+                current_shape = [
+                    out_dim,
+                    int((((current_shape[1] - 2) / 2) + 1)),
+                    int((((current_shape[2] - 2) / 2) + 1)),
+                ]
+
+        # Adding a flatten layer
+        self.layers.append(torch.nn.Flatten())
+
         # Adding one dense layer before output
         if decorrelation_method is not None:
-            self.layers.append(
-                DecorLinear(
-                    int(np.prod(current_shape)),
-                    1000,
-                    decorrelation_method=decorrelation_method,
-                    fwd_layer=dense_layer_type,
-                    bias=biases**layer_kwargs,
-                )
-            )
+            self.layers.append(torch.nn.Dropout(0.25))
 
             self.layers.append(
                 DecorLinear(
-                    1000,
+                    int(np.prod(current_shape)),
+                    hidden_size,
+                    decorrelation_method=decorrelation_method,
+                    fwd_layer=dense_layer_type,
+                    bias=biases,
+                    **layer_kwargs,
+                )
+            )
+
+            self.layers.append(activation_function())
+            self.layers.append(torch.nn.Dropout(0.25))
+
+            self.layers.append(
+                DecorLinear(
+                    hidden_size,
                     out_size,
                     decorrelation_method=decorrelation_method,
+                    fwd_layer=dense_layer_type,
                     **layer_kwargs,
                 )
             )
         else:
+            self.layers.append(torch.nn.Dropout(0.25))
+
             self.layers.append(
                 dense_layer_type(
                     int(np.prod(current_shape)),
-                    1000,
+                    hidden_size,
                     bias=biases,
                     **layer_kwargs,
                 )
             )
 
+            self.layers.append(activation_function())
+            self.layers.append(torch.nn.Dropout(0.25))
+
             self.layers.append(
                 dense_layer_type(
-                    1000,
+                    hidden_size,
                     out_size,
                     bias=biases,
                     **layer_kwargs,
                 )
             )
 
-        self.activation_function = activation_function
         self.layers = torch.nn.ModuleList(self.layers)
+
+        print(self.layers)
 
     def forward(self, x):
         x = x.view(x.size(0), *self.in_shape)
         for indx, layer in enumerate(self.layers):
-            if isinstance(layer, BPLinear) or isinstance(layer, FALinear):
-                x = x.view(x.size(0), -1)
             x = layer(x)
-            if (indx + 1) < len(self.layers):
-                x = self.activation_function(x)
+
         return x
 
     def train_step(self, data, target, onehots, loss_func):
+        self.train()
         # Duplicate data for network clean/noisy pass
         output = self(data)
-        loss = loss_func(output[: len(data)], target, onehots)
-        total_loss = loss.sum()
+        loss = loss_func(output, target, onehots)
+        total_loss = loss.mean()
         total_loss.backward()
         with torch.no_grad():
             for layer in self.layers:
@@ -317,9 +357,10 @@ class ConvNet(torch.nn.Module):
         return total_loss
 
     def test_step(self, data, target, onehots, loss_func):
+        self.eval()
         with torch.no_grad():
             output = self(data)
-            loss = torch.sum(
+            loss = torch.mean(
                 loss_func(output, target, onehots)
             ).item()  # sum up batch loss
             return loss, output
@@ -329,6 +370,8 @@ class ConvNet(torch.nn.Module):
         for layer in self.layers:
             if hasattr(layer, "get_fwd_params"):
                 params.extend(layer.get_fwd_params())
+            else:
+                params.extend(layer.parameters())
         return params
 
     def get_decor_params(self):

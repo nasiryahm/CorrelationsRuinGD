@@ -134,6 +134,7 @@ def train_network(
 
     loss_func = None
     if loss_func_type == "CCE":
+        # loss_obj = torch.nn.NLLLoss(reduction="none")
         loss_obj = torch.nn.CrossEntropyLoss(reduction="none")
         loss_func = lambda input, target, onehot: loss_obj(input, target)
     elif loss_func_type == "MSE":
@@ -222,9 +223,9 @@ def run(config: DictConfig) -> None:
     elif config.layer_type in ["FAConv", "DFAConv"]:
         layer_type = FAConv2d
 
-    act_func = torch.nn.LeakyReLU()
+    act_func = torch.nn.LeakyReLU
     if config.layer_type == "DFA" or config.layer_type == "DFAConv":
-        act_func = ST_LeakyReLU()
+        act_func = ST_LeakyReLU
 
     metrics = train_network(
         batch_size=config.batch_size,

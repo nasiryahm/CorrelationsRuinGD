@@ -8,8 +8,6 @@ metric:
   goal: minimize
   name: train/loss
 parameters:
-  validation:
-    value: True
   batch_size:
     value: 256
   bias:
@@ -19,25 +17,21 @@ parameters:
       # - MNIST
       - CIFAR10
       - CIFAR100
+      # - TIN
   decor_lr:
     values:
-      # - 0.0 
-      # - 0.1
-      # - 0.01
-      # - 1e-03
+      - 0.0
       - 1e-04
       - 1e-05
       - 1e-06
       - 1e-07
       - 1e-08
-      # - 1e-09
   decorrelation_method:
     value: scaled
   device:
     value: cuda:0
   fwd_lr:
     values:
-      # - 0.1
       - 0.01
       - 0.001
       - 0.0001
@@ -47,20 +41,23 @@ parameters:
     value: 1000
   layer_type:
     values:
-      # - BP
+      - BPConv
+      - BP
       - NP
-      # - FA
-      # - DFA
+      - FA
+      - FAConv
+      - DFA
+      - DFAConv
   loss_func_type:
     value: CCE
   n_hidden_layers:
     value: 4
   nb_epochs:
-    value: 100
+    value: 10
   optimizer_type:
     value: Adam
   regularizer_strength:
-    value: 0
+    value: 0.0
   seed:
     values:
       - 42
@@ -68,6 +65,8 @@ parameters:
       # - 44
       # - 45
       # - 46
+  validation:
+    value: True
   wandb.mode:
     value: online
 program: run.py

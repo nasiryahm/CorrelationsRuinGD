@@ -1,6 +1,7 @@
 import torch
 import torch.nn.functional as F
 import bp
+import numpy as np
 
 
 class DecorLinear(torch.nn.Module):
@@ -131,16 +132,26 @@ class DecorConv(torch.nn.Module):
         self.matmulshape = in_shape[0] * kernel_size * kernel_size
         self.decorrelation_method = decorrelation_method
 
-        self.decor_conv = torch.nn.Conv2d(
-            in_shape[0],  # input channels
-            self.matmulshape,  # output channels
-            kernel_size=kernel_size,
-            stride=stride,
+        self.unfolder = torch.nn.Unfold(
+            kernel_size=(kernel_size, kernel_size),
+            dilation=1,
             padding=padding,
-            bias=False,
-            **factory_kwargs,
+            stride=stride,
         )
 
+        self.folder = torch.nn.Fold(
+            output_size=(
+                int((in_shape[1] - self.kernel_size + 2 * padding) / stride + 1),
+                int((in_shape[1] - self.kernel_size + 2 * padding) / stride + 1),
+            ),
+            kernel_size=(1, 1),
+        )
+
+        self.decor_weight = torch.nn.Parameter(
+            torch.empty(self.matmulshape, self.matmulshape, **factory_kwargs),
+        )
+
+        # This layer then acts as a normal convolutional layer over decorrelated patches
         self.fwd_conv = conv_layer(
             self.matmulshape,  # input channels
             out_channels,  # output channels
@@ -154,25 +165,28 @@ class DecorConv(torch.nn.Module):
         self.reset_parameters()
 
     def reset_parameters(self):
-        eye = torch.eye(self.matmulshape)
-        self.decor_conv.weight.data = eye.view(
-            self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
-        ).to(self.decor_conv.weight.device)
+        torch.nn.init.eye_(self.decor_weight)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        input = input.view(-1, *self.in_shape)
-        self.undecorrelated_state = input
-        self.decorrelated_state = self.decor_conv(input)
-        return self.fwd_conv(self.decorrelated_state)
+        # input = input.view(-1, *self.in_shape)
+        self.undecorrelated_state = self.unfolder(input)
+        self.decorrelated_state = torch.einsum(
+            "bnl,nm->bml", self.undecorrelated_state, self.decor_weight
+        )
+        out_dims = int(np.sqrt(self.decorrelated_state.shape[-1]))
+        return self.fwd_conv(self.folder(self.decorrelated_state))
 
     def update_grads(self, feedback) -> None:
         assert self.decorrelated_state is not None, "Call forward() first"
         assert self.undecorrelated_state is not None, "Call forward() first"
 
-        single_patch = self.decorrelated_state[:, :, 0, 0]
+        # Conv outputs are (batch, out_channels, H, W)
+        # This is therefore the first patch from all batches
+        single_patch = self.decorrelated_state[:, :, 0].reshape(-1, self.matmulshape)
 
+        # Height and width dimensions are now equivalent to a batch dimension
         self.decorrelated_state = torch.permute(
-            self.decorrelated_state, (0, 2, 3, 1)
+            self.decorrelated_state, (0, 2, 1)
         ).contiguous()
 
         self.decorrelated_state = self.decorrelated_state.reshape(-1, self.matmulshape)
@@ -184,29 +198,23 @@ class DecorConv(torch.nn.Module):
 
         if self.decorrelation_method == "copi":
             off_diag_corr = corr * (1.0 - self.eye)
-            w_grads = off_diag_corr @ self.weight.data
+            w_grads = off_diag_corr @ self.decor_weight.data
         elif self.decorrelation_method == "scaled":
             normalizer = torch.sqrt(
                 (
                     torch.mean(
-                        self.undecorrelated_state[
-                            :, :, : self.kernel_size, : self.kernel_size
-                        ]
-                        ** 2
-                    )
+                        self.undecorrelated_state[:, :, 0] ** 2,
+                        axis=0,
+                    ).flatten()
                 )
-            ) / torch.sqrt((torch.mean(single_patch**2)) + 1e-8)
+            ) / torch.sqrt(torch.mean(single_patch**2, axis=0) + 1e-8)
 
-            self.decor_conv.weight.data *= normalizer
+            w_grads = corr @ self.decor_weight.data
 
-            w_grads = corr @ self.decor_conv.weight.data.reshape(
-                self.matmulshape, self.matmulshape
-            )
+            self.decor_weight.data *= normalizer[:, None]
 
         # Update grads of decorrelation matrix
-        self.decor_conv.weight.grad = w_grads.reshape(
-            self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
-        )
+        self.decor_weight.grad = w_grads
 
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
@@ -218,7 +226,7 @@ class DecorConv(torch.nn.Module):
         return [] + self.fwd_conv.get_fwd_params()
 
     def get_decor_params(self):
-        params = [self.decor_conv.weight] + self.fwd_conv.get_decor_params()
+        params = [self.decor_weight] + self.fwd_conv.get_decor_params()
         return params
 
 

@@ -156,19 +156,25 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         y_test = test_dataset.targets
 
     # Reshaping to flat digits
-    x_train = x_train.reshape(x_train.shape[0], -1)
-    x_test = x_test.reshape(x_test.shape[0], -1)
+    # x_train = x_train.reshape(x_train.shape[0], -1)
+    # x_test = x_test.reshape(x_test.shape[0], -1)
     y_train = np.asarray(y_train)
     y_test = np.asarray(y_test)
 
     # Extracting a validation, rather than test, set
     # Last 10K samples taken as test
     if validation:
-        x_test = x_train[-10000:]
-        y_test = y_train[-10000:]
+        # First shuffle the data
+        indices = np.random.permutation(len(x_train))
+        x_train = x_train[indices]
+        y_train = y_train[indices]
 
-        x_train = x_train[: len(x_train) - 10000]
-        y_train = y_train[: len(y_train) - 10000]
+        nb_train_samples = len(x_train) - 10_000
+
+        x_test = x_train[nb_train_samples:]
+        y_test = y_train[nb_train_samples:]
+        x_train = x_train[:nb_train_samples]
+        y_train = y_train[:nb_train_samples]
 
     # Squeezing out any excess dimension in the labels (true for CIFAR10/100)
     y_train = np.squeeze(y_train)
@@ -218,12 +224,11 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         stds = (torch.std(x_train, axis=(0, 2, 3)) + 1e-8)[None, :, None, None]
         x_train = (x_train - means) / stds
         x_test = (x_test - means) / stds
+
     if (
         dataset_importer == torchvision.datasets.CIFAR10
         or dataset_importer == torchvision.datasets.CIFAR100
     ):
-        x_train = x_train.reshape(-1, 3, 32, 32)
-        x_test = x_test.reshape(-1, 3, 32, 32)
 
         means = torch.mean(x_train, axis=(0, 2, 3))[None, :, None, None]
         stds = (torch.std(x_train, axis=(0, 2, 3)) + 1e-8)[None, :, None, None]
@@ -242,28 +247,74 @@ def construct_dataloaders(
     device="cpu",
 ):
     train_kwargs = {"batch_size": batch_size, "num_workers": 0, "shuffle": True}
-    test_kwargs = {"batch_size": batch_size, "num_workers": 0}
+    test_kwargs = {"batch_size": batch_size, "num_workers": 0, "shuffle": False}
 
     train_transforms, test_transforms = None, None
-    if tv_dataset == "TIN":
+    if (
+        tv_dataset == torchvision.datasets.CIFAR10
+        or tv_dataset == torchvision.datasets.CIFAR100
+        or tv_dataset == torchvision.datasets.MNIST
+    ):
+
+        if (
+            tv_dataset == torchvision.datasets.CIFAR10
+            or tv_dataset == torchvision.datasets.CIFAR100
+        ):
+            train_transforms = v2.Compose(
+                [
+                    v2.RandomCrop(32, padding=4),
+                    v2.RandomHorizontalFlip(),
+                    v2.ToTensor(),
+                    v2.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                ]
+            )
+
+            test_transforms = v2.Compose(
+                [
+                    v2.ToTensor(),
+                    v2.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
+                ]
+            )
+
+        trainset = tv_dataset(
+            root="./data", train=True, download=True, transform=train_transforms
+        )
+        if validation:
+            trainset, testset = torch.utils.data.random_split(
+                trainset, [len(trainset) - 10_000, 10_000]
+            )
+        else:
+            testset = tv_dataset(
+                root="./data", train=False, download=True, transform=test_transforms
+            )
+
+        train_loader = torch.utils.data.DataLoader(
+            trainset, batch_size=batch_size, shuffle=True, num_workers=4
+        )
+
+        test_loader = torch.utils.data.DataLoader(
+            testset, batch_size=batch_size, shuffle=False, num_workers=4
+        )
+    else:
+        # if tv_dataset == "TIN":
         train_transforms = v2.Compose(
             [v2.RandomHorizontalFlip(p=0.5), v2.RandomCrop(56)]
         )
         test_transforms = v2.Compose([v2.CenterCrop(56)])
 
-    x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
-        tv_dataset, device, torch.float32, validation=validation, mean=mean, std=std
-    )
+        x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
+            tv_dataset, device, torch.float32, validation=validation, mean=mean, std=std
+        )
 
-    train_dataset = ClassificationLoadedDataset(
-        x_train, y_train, y_train_onehot, train_transforms
-    )
-    test_dataset = ClassificationLoadedDataset(
-        x_test, y_test, y_test_onehot, test_transforms
-    )
+        train_dataset = ClassificationLoadedDataset(
+            x_train, y_train, y_train_onehot, train_transforms
+        )
+        test_dataset = ClassificationLoadedDataset(
+            x_test, y_test, y_test_onehot, test_transforms
+        )
 
-    train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
-    test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
+        train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
+        test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
 
     return train_loader, test_loader
 
@@ -275,7 +326,9 @@ def test(model, device, train_test, test_loader, loud, loss_func, top5=False):
     if top5:
         top5_correct = 0
     with torch.no_grad():
-        for data, target, onehots in test_loader:
+        for data, target in test_loader:
+            onehots = torch.nn.functional.one_hot(target, 10).to(device)
+            data, target = data.to(device), target.to(device)
             loss, output = model.test_step(data, target, onehots, loss_func)
             test_loss += loss
             pred = output.argmax(dim=1, keepdim=True)
@@ -285,8 +338,8 @@ def test(model, device, train_test, test_loader, loud, loss_func, top5=False):
                 top5_correct += (
                     top5_pred.eq(target.view(-1, 1).expand_as(top5_pred)).sum().item()
                 )
+        test_loss /= len(test_loader)
 
-    test_loss /= len(test_loader.dataset)
     if loud:
         print(
             "\n{} set: Average loss: {:.6f}, Accuracy: {}/{} ({:.0f}%)\n".format(
@@ -348,13 +401,13 @@ def train(
     loud=False,
 ):
     model.train()
-    for batch_idx, (data, target, onehots) in enumerate(train_loader):
+    for batch_idx, (data, target) in enumerate(train_loader):
         for o in optimizers:
             o.zero_grad()
 
+        onehots = torch.nn.functional.one_hot(target, 10).to(device)
+        data, target = data.to(device), target.to(device)
         loss = model.train_step(data, target, onehots, loss_func)
-
-        # torch.nn.utils.clip_grad_norm(model.get_fwd_params(), 0.1)
 
         for o in optimizers:
             o.step()
