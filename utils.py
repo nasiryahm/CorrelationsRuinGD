@@ -29,10 +29,9 @@ class ST_LeakyReLU(torch.nn.Module):
 class ClassificationLoadedDataset(torch.utils.data.Dataset):
     """Classification Dataset in Memory"""
 
-    def __init__(self, x, y, y_onehot, transform=None):
+    def __init__(self, x, y, transform=None):
         self.x = x
         self.y = y
-        self.y_onehot = y_onehot
         self.transform = transform
 
     def __len__(self):
@@ -43,12 +42,11 @@ class ClassificationLoadedDataset(torch.utils.data.Dataset):
         assert idx < len(self.x), "index must be within range"
         x_sample = self.x[idx]
         y_sample = self.y[idx]
-        y_onehot = self.y_onehot[idx]
 
         if self.transform:
             x_sample = self.transform(x_sample)
 
-        return x_sample, y_sample, y_onehot
+        return x_sample, y_sample
 
 
 def format_tin_val(datadir):
@@ -188,18 +186,12 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
     if not isinstance(x_test, torch.Tensor):
         x_test = torch.tensor(x_test)
 
-    # Creating onehot encoded targets
-    y_train_onehot = torch.nn.functional.one_hot(y_train, torch.max(y_train) + 1)
-    y_test_onehot = torch.nn.functional.one_hot(y_test, torch.max(y_train) + 1)
-
     # Data to device (datasets small enough to fit directly)
     x_train = x_train.to(device).type(fltype)
     y_train = y_train.type(torch.LongTensor).to(device)
-    y_train_onehot = y_train_onehot.to(device).type(fltype)
 
     x_test = x_test.to(device).type(fltype)
     y_test = y_test.type(torch.LongTensor).to(device)
-    y_test_onehot = y_test_onehot.to(device).type(fltype)
 
     maxval = torch.max(x_train)
     x_train = x_train / maxval
@@ -214,7 +206,7 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         x_train = (x_train - means) / stds
         x_test = (x_test - means) / stds
 
-    return x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot
+    return x_train, y_train, x_test, y_test
 
 
 def construct_dataloaders(
@@ -281,16 +273,12 @@ def construct_dataloaders(
         )
         test_transforms = v2.Compose([v2.CenterCrop(56)])
 
-        x_train, y_train, y_train_onehot, x_test, y_test, y_test_onehot = load_dataset(
+        x_train, y_train, x_test, y_test = load_dataset(
             tv_dataset, device, torch.float32, validation=validation, mean=mean, std=std
         )
 
-        train_dataset = ClassificationLoadedDataset(
-            x_train, y_train, y_train_onehot, train_transforms
-        )
-        test_dataset = ClassificationLoadedDataset(
-            x_test, y_test, y_test_onehot, test_transforms
-        )
+        train_dataset = ClassificationLoadedDataset(x_train, y_train, train_transforms)
+        test_dataset = ClassificationLoadedDataset(x_test, y_test, test_transforms)
 
         train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
         test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
