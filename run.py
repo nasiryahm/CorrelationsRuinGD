@@ -159,6 +159,7 @@ def train_network(
             loud=loud,
             wandb=wandb,
             top5=(dataset == "TIN"),
+            num_classes=out_size,
         )
         metrics = update_metrics(
             model,
@@ -171,9 +172,19 @@ def train_network(
             loud=loud,
             wandb=wandb,
             top5=(dataset == "TIN"),
+            num_classes=out_size,
         )
         if e < nb_epochs:
-            train(model, device, train_loader, optimizers, e, loss_func, loud=False)
+            train(
+                model,
+                device,
+                train_loader,
+                optimizers,
+                e,
+                loss_func,
+                loud=False,
+                num_classes=out_size,
+            )
         if np.isnan(metrics[test_val]["loss"][-1]) or np.isnan(
             metrics["train"]["loss"][-1]
         ):

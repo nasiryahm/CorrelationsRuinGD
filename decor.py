@@ -9,7 +9,7 @@ class DecorLinear(torch.nn.Module):
         self,
         in_features: int,
         out_features: int,
-        decorrelation_method: str = "copi",
+        decorrelation_method: str = "scaled",
         fwd_layer: torch.nn.Module = bp.BPLinear,
         bias: bool = True,
         device=None,
@@ -53,8 +53,18 @@ class DecorLinear(torch.nn.Module):
             self.decorrelated_state = F.linear(
                 self.undecorrelated_state, self.decor_weight
             )
+            self.compute_normalization()
+            return self.fwd_layer(self.normalization[None, :] * self.decorrelated_state)
 
         return self.fwd_layer(self.decorrelated_state)
+
+    def compute_normalization(self):
+        self.normalization = torch.sqrt(
+            (torch.mean(self.undecorrelated_state**2, axis=0))
+        ) / (torch.sqrt((torch.mean(self.decorrelated_state**2, axis=0))) + 1e-8)
+        # normalizer = torch.sqrt(
+        #     (torch.mean(self.undecorrelated_state**2))
+        # ) / torch.sqrt((torch.mean(self.decorrelated_state**2)) + 1e-8)
 
     def update_grads(self, feedback) -> None:
         assert self.decorrelated_state is not None, "Call forward() first"
@@ -69,13 +79,8 @@ class DecorLinear(torch.nn.Module):
             off_diag_corr = corr * (1.0 - self.eye)
             w_grads = off_diag_corr @ self.decor_weight.data
         elif self.decorrelation_method == "scaled":
-            normalizer = torch.sqrt(
-                (torch.mean(self.undecorrelated_state**2, axis=0))
-            ) / torch.sqrt((torch.mean(self.decorrelated_state**2, axis=0)) + 1e-8)
-
             w_grads = corr @ self.decor_weight.data
-
-            self.decor_weight.data *= normalizer[:, None]
+            self.decor_weight.data *= self.normalization[:, None]
 
         elif self.decorrelation_method == "foldiak":
             w_grads = -corr
@@ -86,6 +91,7 @@ class DecorLinear(torch.nn.Module):
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
         self.decorrelated_state = None
+        self.normalization = None
 
         self.fwd_layer.update_grads(feedback)
 
@@ -115,7 +121,7 @@ class DecorConv(torch.nn.Module):
         kernel_size: int,
         stride: int,
         padding: int,
-        decorrelation_method: str = "copi",
+        decorrelation_method: str = "scaled",
         conv_layer: torch.nn.Module = bp.BPConv2d,
         bias: bool = False,
         device=None,
@@ -173,45 +179,71 @@ class DecorConv(torch.nn.Module):
         self.decorrelated_state = torch.einsum(
             "bnl,nm->bml", self.undecorrelated_state, self.decor_weight
         )
-        out_dims = int(np.sqrt(self.decorrelated_state.shape[-1]))
-        return self.fwd_conv(self.folder(self.decorrelated_state))
+
+        self.compute_normalization()
+
+        return self.fwd_conv(
+            self.folder(self.normalization[None, :, None] * self.decorrelated_state)
+        )
+
+    def compute_normalization(self):
+        self.normalization = torch.sqrt(
+            (
+                torch.mean(
+                    self.undecorrelated_state[:, :, :] ** 2,
+                    axis=(0, 2),
+                ).flatten()
+            )
+        ) / (
+            torch.sqrt(
+                torch.mean(
+                    self.decorrelated_state[:, :, :] ** 2,
+                    axis=(0, 2),
+                ).flatten()
+            )
+            + 1e-8
+        )
+        # normalizer = torch.sqrt(
+        #     (
+        #         torch.mean(
+        #             self.undecorrelated_state[:, :, :] ** 2,
+        #         )
+        #     )
+        # ) / torch.sqrt(
+        #     torch.mean(
+        #         self.decorrelated_state[:, :, :] ** 2,
+        #     )
+        #     + 1e-8
+        # )
 
     def update_grads(self, feedback) -> None:
         assert self.decorrelated_state is not None, "Call forward() first"
         assert self.undecorrelated_state is not None, "Call forward() first"
 
         # Conv outputs are (batch, out_channels, H, W)
-        # This is therefore the first patch from all batches
-        single_patch = self.decorrelated_state[:, :, 0].reshape(-1, self.matmulshape)
 
         # Height and width dimensions are now equivalent to a batch dimension
-        self.decorrelated_state = torch.permute(
+        modified_decorrelated_state = torch.permute(
             self.decorrelated_state, (0, 2, 1)
         ).contiguous()
 
-        self.decorrelated_state = self.decorrelated_state.reshape(-1, self.matmulshape)
+        modified_decorrelated_state = modified_decorrelated_state.reshape(
+            -1, self.matmulshape
+        )
 
         # The off-diagonal correlation = (1/batch_size)*(x.T @ x)*(1.0 - I)
-        corr = (1 / len(self.decorrelated_state)) * (
-            self.decorrelated_state.transpose(0, 1) @ self.decorrelated_state
+        corr = (1 / len(modified_decorrelated_state)) * (
+            modified_decorrelated_state.transpose(0, 1) @ modified_decorrelated_state
         )
 
         if self.decorrelation_method == "copi":
             off_diag_corr = corr * (1.0 - self.eye)
             w_grads = off_diag_corr @ self.decor_weight.data
         elif self.decorrelation_method == "scaled":
-            normalizer = torch.sqrt(
-                (
-                    torch.mean(
-                        self.undecorrelated_state[:, :, 0] ** 2,
-                        axis=0,
-                    ).flatten()
-                )
-            ) / torch.sqrt(torch.mean(single_patch**2, axis=0) + 1e-8)
 
             w_grads = corr @ self.decor_weight.data
 
-            self.decor_weight.data *= normalizer[:, None]
+            self.decor_weight.data *= self.normalization
 
         # Update grads of decorrelation matrix
         self.decor_weight.grad = w_grads
@@ -219,6 +251,7 @@ class DecorConv(torch.nn.Module):
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
         self.decorrelated_state = None
+        self.normalization = None
 
         self.fwd_conv.update_grads(feedback)
 

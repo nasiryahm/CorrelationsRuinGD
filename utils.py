@@ -89,6 +89,7 @@ def format_tin_val(datadir):
 
 def load_dataset(dataset_importer, device, fltype, validation, mean, std):
     if dataset_importer == "TIN":
+
         if os.path.exists("./datasets/tiny-imagenet-200/y_train.npy"):
             print("Loading TinyImageNet")
             x_train = np.load("./datasets/tiny-imagenet-200/x_train.npy")
@@ -156,8 +157,6 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
         y_test = test_dataset.targets
 
     # Reshaping to flat digits
-    # x_train = x_train.reshape(x_train.shape[0], -1)
-    # x_test = x_test.reshape(x_test.shape[0], -1)
     y_train = np.asarray(y_train)
     y_test = np.asarray(y_test)
 
@@ -206,29 +205,9 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
     x_train = x_train / maxval
     x_test = x_test / maxval
 
-    if std is not None:
-        d_mean = torch.mean(x_train, axis=0)
-        d_std = torch.std(x_train, axis=0) + 1e-8
-        x_train = ((x_train - d_mean) / d_std) * std + d_mean
-        x_test = ((x_test - d_mean) / d_std) * std + d_mean
-    if mean is not None:
-        d_mean = torch.mean(x_train, axis=0)
-        x_train = x_train - d_mean + mean
-        x_test = x_test - d_mean + mean
-
     if dataset_importer == "TIN":
         x_train = x_train.reshape(-1, 3, 64, 64)
         x_test = x_test.reshape(-1, 3, 64, 64)
-
-        means = torch.mean(x_train, axis=(0, 2, 3))[None, :, None, None]
-        stds = (torch.std(x_train, axis=(0, 2, 3)) + 1e-8)[None, :, None, None]
-        x_train = (x_train - means) / stds
-        x_test = (x_test - means) / stds
-
-    if (
-        dataset_importer == torchvision.datasets.CIFAR10
-        or dataset_importer == torchvision.datasets.CIFAR100
-    ):
 
         means = torch.mean(x_train, axis=(0, 2, 3))[None, :, None, None]
         stds = (torch.std(x_train, axis=(0, 2, 3)) + 1e-8)[None, :, None, None]
@@ -319,7 +298,9 @@ def construct_dataloaders(
     return train_loader, test_loader
 
 
-def test(model, device, train_test, test_loader, loud, loss_func, top5=False):
+def test(
+    model, device, train_test, test_loader, loud, loss_func, top5=False, num_classes=10
+):
     model.eval()
     test_loss = 0
     correct = 0
@@ -327,7 +308,7 @@ def test(model, device, train_test, test_loader, loud, loss_func, top5=False):
         top5_correct = 0
     with torch.no_grad():
         for data, target in test_loader:
-            onehots = torch.nn.functional.one_hot(target, 10).to(device)
+            onehots = torch.nn.functional.one_hot(target, num_classes).to(device)
             data, target = data.to(device), target.to(device)
             loss, output = model.test_step(data, target, onehots, loss_func)
             test_loss += loss
@@ -373,8 +354,11 @@ def update_metrics(
     loud=False,
     wandb=None,
     top5=False,
+    num_classes=10,
 ):
-    loss, acc = test(model, device, train_test, loader, loud, loss_func, top5)
+    loss, acc = test(
+        model, device, train_test, loader, loud, loss_func, top5, num_classes
+    )
     metrics[train_test]["loss"].append(loss)
     metrics[train_test]["acc"].append(acc)
 
@@ -399,13 +383,14 @@ def train(
     loss_func,
     log_interval=100,
     loud=False,
+    num_classes=10,
 ):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
         for o in optimizers:
             o.zero_grad()
 
-        onehots = torch.nn.functional.one_hot(target, 10).to(device)
+        onehots = torch.nn.functional.one_hot(target, num_classes).to(device)
         data, target = data.to(device), target.to(device)
         loss = model.train_step(data, target, onehots, loss_func)
 

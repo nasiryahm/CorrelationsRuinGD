@@ -282,7 +282,6 @@ class ConvNet(torch.nn.Module):
 
         # Adding one dense layer before output
         if decorrelation_method is not None:
-            self.layers.append(torch.nn.Dropout(0.25))
 
             self.layers.append(
                 DecorLinear(
@@ -296,7 +295,6 @@ class ConvNet(torch.nn.Module):
             )
 
             self.layers.append(activation_function())
-            self.layers.append(torch.nn.Dropout(0.25))
 
             self.layers.append(
                 DecorLinear(
@@ -308,7 +306,6 @@ class ConvNet(torch.nn.Module):
                 )
             )
         else:
-            self.layers.append(torch.nn.Dropout(0.25))
 
             self.layers.append(
                 dense_layer_type(
@@ -320,7 +317,6 @@ class ConvNet(torch.nn.Module):
             )
 
             self.layers.append(activation_function())
-            self.layers.append(torch.nn.Dropout(0.25))
 
             self.layers.append(
                 dense_layer_type(
