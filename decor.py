@@ -76,8 +76,8 @@ class DecorLinear(torch.nn.Module):
             off_diag_corr = corr * (1.0 - self.eye)
             w_grads = off_diag_corr @ self.decor_weight.data
         elif self.decorrelation_method == "scaled":
-            w_grads = corr @ self.decor_weight.data
             self.decor_weight.data *= self.normalization[:, None]
+            w_grads = corr @ self.decor_weight.data
 
         elif self.decorrelation_method == "foldiak":
             w_grads = -corr
@@ -225,10 +225,8 @@ class DecorConv(torch.nn.Module):
             off_diag_corr = corr * (1.0 - self.eye)
             w_grads = off_diag_corr @ self.decor_weight.data
         elif self.decorrelation_method == "scaled":
-
-            w_grads = corr @ self.decor_weight.data
-
             self.decor_weight.data *= self.normalization
+            w_grads = corr @ self.decor_weight.data
 
         # Update grads of decorrelation matrix
         self.decor_weight.grad = w_grads
@@ -245,78 +243,4 @@ class DecorConv(torch.nn.Module):
 
     def get_decor_params(self):
         params = [self.decor_weight] + self.fwd_conv.get_decor_params()
-        return params
-
-
-class MultiDecor(torch.nn.Module):
-    def __init__(
-        self,
-        in_shape: tuple,
-        decorrelation_method: str = "copi",
-        device=None,
-        dtype=None,
-    ) -> None:
-        super().__init__()
-        assert len(in_shape) == 3, "MultiDecor only supports 3D inputs, (C, H, W)"
-        assert decorrelation_method in ["copi", "scaled", "foldiak"]
-        factory_kwargs = {"device": device, "dtype": dtype}
-
-        self.in_shape = in_shape
-        self.channel_dim = in_shape[0]
-        self.image_dim = int(in_shape[1] * in_shape[2])
-
-        self.channel_decor = DecorLinear(
-            self.channel_dim,
-            self.channel_dim,
-            decorrelation_method,
-            **factory_kwargs,
-        )
-        self.image_decor = DecorLinear(
-            self.image_dim,
-            self.image_dim,
-            decorrelation_method,
-            **factory_kwargs,
-        )
-
-    def forward(self, input: torch.Tensor) -> torch.Tensor:
-        input = input.view(-1, *self.in_shape)
-        init_shape = input.shape
-        input = input.view(init_shape[0] * self.channel_dim, self.image_dim)
-        input = self.image_decor.forward(input)
-        input = input.view(init_shape)
-
-        input = input.permute(0, 2, 3, 1).reshape(-1, self.channel_dim).contiguous()
-        input = self.channel_decor.forward(input)
-        input = input.view(init_shape[0], init_shape[2], init_shape[3], init_shape[1])
-        input = input.permute(0, 3, 1, 2).contiguous()
-
-        image_renorm = torch.sqrt(
-            torch.sum(self.image_decor.decorrelated_state**2) / torch.sum(input**2)
-        )
-
-        self.image_decor.decorrelated_state = (
-            image_renorm
-            * input.clone().view(init_shape[0] * self.channel_dim, self.image_dim)[
-                : init_shape[0]
-            ]
-        )
-
-        return input
-
-    # Define a function to take the input and run the channel decor forward
-    def channel_decor_forward(self, input: torch.Tensor) -> torch.Tensor:
-        return self.channel_decor.forward(input)
-
-    def update_grads(self, _) -> None:
-        self.channel_decor.update_grads(_)
-        self.image_decor.update_grads(_)
-
-    def get_fwd_params(self):
-        params = self.channel_decor.get_fwd_params() + self.image_decor.get_fwd_params()
-        return params
-
-    def get_decor_params(self):
-        params = (
-            self.channel_decor.get_decor_params() + self.image_decor.get_decor_params()
-        )
         return params

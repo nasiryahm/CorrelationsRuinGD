@@ -2,7 +2,7 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from decor import DecorLinear, HalfBatchDecorLinear, MultiDecor, DecorConv
+from decor import DecorLinear, HalfBatchDecorLinear, DecorConv
 from fa import FALinear, FAConv2d
 from np import NPLinear
 from bp import BPLinear, BPConv2d
