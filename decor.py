@@ -17,7 +17,7 @@ class DecorLinear(torch.nn.Module):
         **layer_kwargs,
     ) -> None:
         super().__init__()
-        assert decorrelation_method in ["copi", "scaled", "foldiak"]
+        assert decorrelation_method in ["demeaned-scaled", "scaled", "foldiak"]
         factory_kwargs = {"device": device, "dtype": dtype}
 
         self.in_features = in_features
@@ -36,6 +36,8 @@ class DecorLinear(torch.nn.Module):
 
         self.fwd_layer = fwd_layer(in_features, out_features, bias=bias, **layer_kwargs)
 
+        self.bn = torch.nn.BatchNorm1d(in_features, affine=False, **factory_kwargs)
+
         self.reset_decor_parameters()
 
     def reset_decor_parameters(self):
@@ -49,14 +51,18 @@ class DecorLinear(torch.nn.Module):
             self.decorrelated_state = F.linear(
                 input, torch.linalg.inv(self.decor_weight).detach()
             )
+            return self.fwd_layer(self.decorrelated_state)
         else:
+            if self.decorrelation_method == "demeaned-scaled":
+                self.undecorrelated_state = self.bn(
+                    self.undecorrelated_state.reshape(len(input), -1)
+                ).reshape(input.shape)
+
             self.decorrelated_state = F.linear(
                 self.undecorrelated_state, self.decor_weight
             )
             self.compute_normalization()
             return self.fwd_layer(self.normalization[None, :] * self.decorrelated_state)
-
-        return self.fwd_layer(self.decorrelated_state)
 
     def compute_normalization(self):
         self.normalization = torch.sqrt(
@@ -72,10 +78,7 @@ class DecorLinear(torch.nn.Module):
             self.decorrelated_state.transpose(0, 1) @ self.decorrelated_state
         )
 
-        if self.decorrelation_method == "copi":
-            off_diag_corr = corr * (1.0 - self.eye)
-            w_grads = off_diag_corr @ self.decor_weight.data
-        elif self.decorrelation_method == "scaled":
+        if self.decorrelation_method in ["demeaned-scaled", "scaled"]:
             self.decor_weight.data *= self.normalization[:, None]
             w_grads = corr @ self.decor_weight.data
 
@@ -127,7 +130,7 @@ class DecorConv(torch.nn.Module):
         # Assumes padding of zero and stride of 1
         super().__init__()
         assert len(in_shape) == 3, "ConvDecor only supports 3D inputs, (C, H, W)"
-        assert decorrelation_method in ["scaled", "foldiak"]
+        assert decorrelation_method in ["demeaned-scaled", "scaled"]
         factory_kwargs = {"device": device, "dtype": dtype}
 
         self.in_shape = in_shape
@@ -165,13 +168,18 @@ class DecorConv(torch.nn.Module):
             **factory_kwargs,
         )
 
+        self.bn = torch.nn.BatchNorm1d(
+            np.prod(in_shape), affine=False, **factory_kwargs
+        )
+
         self.reset_parameters()
 
     def reset_parameters(self):
         torch.nn.init.eye_(self.decor_weight)
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        # input = input.view(-1, *self.in_shape)
+        if self.decorrelation_method == "demeaned-scaled":
+            self.input = self.bn(input.reshape(len(input), -1)).reshape(input.shape)
         self.undecorrelated_state = self.unfolder(input)
         self.decorrelated_state = torch.einsum(
             "bnl,nm->bml", self.undecorrelated_state, self.decor_weight
@@ -221,12 +229,8 @@ class DecorConv(torch.nn.Module):
             modified_decorrelated_state.transpose(0, 1) @ modified_decorrelated_state
         )
 
-        if self.decorrelation_method == "copi":
-            off_diag_corr = corr * (1.0 - self.eye)
-            w_grads = off_diag_corr @ self.decor_weight.data
-        elif self.decorrelation_method == "scaled":
-            self.decor_weight.data *= self.normalization
-            w_grads = corr @ self.decor_weight.data
+        self.decor_weight.data *= self.normalization
+        w_grads = corr @ self.decor_weight.data
 
         # Update grads of decorrelation matrix
         self.decor_weight.grad = w_grads

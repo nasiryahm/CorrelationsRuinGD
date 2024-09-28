@@ -18,7 +18,7 @@ class Net(torch.nn.Module):
         layer_type=BPLinear,
         activation_function=torch.nn.LeakyReLU,
         biases=True,
-        decorrelation_method="copi",
+        decorrelation_method="scaled",
         layer_kwargs={},
     ):
         super(Net, self).__init__()
@@ -113,7 +113,7 @@ class PerturbNet(torch.nn.Module):
         layer_type=NPLinear,
         activation_function=torch.nn.LeakyReLU,
         biases=True,
-        decorrelation_method="copi",
+        decorrelation_method="scaled",
         layer_kwargs={},
     ):
         super(PerturbNet, self).__init__()
@@ -209,7 +209,7 @@ class ConvNet(torch.nn.Module):
         layer_type=BPConv2d,
         activation_function=torch.nn.ReLU,
         biases=True,
-        decorrelation_method="copi",
+        decorrelation_method="scaled",
         layer_kwargs={},
     ):
         super(ConvNet, self).__init__()
