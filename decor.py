@@ -91,9 +91,6 @@ class DecorLinear(torch.nn.Module):
         return output
 
     def compute_normalization(self):
-        # self.normalization = torch.sqrt(
-        #     (torch.mean(self.undecorrelated_state**2, axis=0))
-        # ) / (torch.sqrt((torch.mean(self.decorrelated_state**2, axis=0))) + 1e-8)
         self.normalization = torch.sqrt(
             (torch.mean(self.undecorrelated_state**2))
         ) / (torch.sqrt((torch.mean(self.decorrelated_state**2))) + 1e-8)
@@ -232,22 +229,6 @@ class DecorConv(torch.nn.Module):
         return output
 
     def compute_normalization(self):
-        # self.normalization = torch.sqrt(
-        #     (
-        #         torch.mean(
-        #             self.undecorrelated_state**2,
-        #             axis=(0, 2, 3),
-        #         ).flatten()
-        #     )
-        # ) / (
-        #     torch.sqrt(
-        #         torch.mean(
-        #             self.decorrelated_state**2,
-        #             axis=(0, 2, 3),
-        #         ).flatten()
-        #     )
-        #     + 1e-8
-        # )
         self.normalization = torch.sqrt(
             (
                 torch.mean(
