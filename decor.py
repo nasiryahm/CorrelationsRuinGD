@@ -4,6 +4,38 @@ import bp
 import numpy as np
 
 
+class DeMeaner(torch.nn.Module):
+    def __init__(self, num_features, momentum=0.1, **kwargs):
+        super(DeMeaner, self).__init__()
+        self.num_features = num_features
+        self.momentum = momentum
+
+        self.register_buffer("running_mean", torch.zeros(num_features, **kwargs))
+        self.reset_parameters()
+
+    def reset_parameters(self):
+        self.running_mean.zero_()
+
+    def forward(self, input):
+        assert self.num_features == input.shape[1], "Input shape mismatch"
+
+        if self.training:
+            avg = torch.mean(input, axis=0)
+            while len(avg.shape) > 1:
+                avg = torch.mean(avg, axis=-1)
+            self.running_mean = (
+                1 - self.momentum
+            ) * self.running_mean + self.momentum * avg
+        else:
+            avg = self.running_mean
+
+        avg = avg[None, :]
+        while len(avg.shape) < len(input.shape):
+            avg = avg.unsqueeze(-1)
+
+        return input - avg
+
+
 class DecorLinear(torch.nn.Module):
     def __init__(
         self,
@@ -36,7 +68,7 @@ class DecorLinear(torch.nn.Module):
 
         self.fwd_layer = fwd_layer(in_features, out_features, bias=bias, **layer_kwargs)
 
-        self.bn = torch.nn.BatchNorm1d(in_features, affine=False, **factory_kwargs)
+        self.demeaner = DeMeaner(in_features, **factory_kwargs)
 
         self.reset_decor_parameters()
 
@@ -54,32 +86,37 @@ class DecorLinear(torch.nn.Module):
             return self.fwd_layer(self.decorrelated_state)
         else:
             if self.decorrelation_method == "demeaned-scaled":
-                self.undecorrelated_state = self.bn(
+                mid_state = self.demeaner(
                     self.undecorrelated_state.reshape(len(input), -1)
                 ).reshape(input.shape)
 
-            self.decorrelated_state = F.linear(
-                self.undecorrelated_state, self.decor_weight
-            )
-            self.compute_normalization()
-            return self.fwd_layer(self.normalization[None, :] * self.decorrelated_state)
+            self.decorrelated_state = F.linear(mid_state, self.decor_weight)
+
+            return self.fwd_layer(self.decorrelated_state)
 
     def compute_normalization(self):
+        # self.normalization = torch.sqrt(
+        #     (torch.mean(self.undecorrelated_state**2, axis=0))
+        # ) / (torch.sqrt((torch.mean(self.decorrelated_state**2, axis=0))) + 1e-8)
         self.normalization = torch.sqrt(
-            (torch.mean(self.undecorrelated_state**2, axis=0))
-        ) / (torch.sqrt((torch.mean(self.decorrelated_state**2, axis=0))) + 1e-8)
+            (torch.mean(self.undecorrelated_state**2))
+        ) / (torch.sqrt((torch.mean(self.decorrelated_state**2))) + 1e-8)
 
     def update_grads(self, feedback) -> None:
         assert self.decorrelated_state is not None, "Call forward() first"
         assert self.undecorrelated_state is not None, "Call forward() first"
 
         # The off-diagonal correlation = (1/batch_size)*(x.T @ x)*(1.0 - I)
+        num_samples = int(0.1 * len(self.undecorrelated_state)) + 1
+        self.decorrelated_state = self.decorrelated_state[:num_samples]
+        self.undecorrelated_state = self.undecorrelated_state[:num_samples]
         corr = (1 / len(self.decorrelated_state)) * (
             self.decorrelated_state.transpose(0, 1) @ self.decorrelated_state
         )
 
         if self.decorrelation_method in ["demeaned-scaled", "scaled"]:
-            self.decor_weight.data *= self.normalization[:, None]
+            self.compute_normalization()
+            self.decor_weight.data *= self.normalization
             w_grads = corr @ self.decor_weight.data
 
         elif self.decorrelation_method == "foldiak":
@@ -157,6 +194,15 @@ class DecorConv(torch.nn.Module):
             torch.empty(self.matmulshape, self.matmulshape, **factory_kwargs),
         )
 
+        # self.decor_conv = torch.nn.Conv2d(
+        #     in_channels=in_shape[0],
+        #     out_channels=self.matmulshape,
+        #     kernel_size=kernel_size,
+        #     stride=stride,
+        #     padding=padding,
+        #     bias=False,
+        # )
+
         # This layer then acts as a normal convolutional layer over decorrelated patches
         self.fwd_conv = conv_layer(
             self.matmulshape,  # input channels
@@ -168,42 +214,66 @@ class DecorConv(torch.nn.Module):
             **factory_kwargs,
         )
 
-        self.bn = torch.nn.BatchNorm1d(
-            np.prod(in_shape), affine=False, **factory_kwargs
-        )
+        self.demeaner = DeMeaner(self.matmulshape, **factory_kwargs)
+        # self.demeaner = DeMeaner(in_shape[0], **factory_kwargs)
 
         self.reset_parameters()
 
     def reset_parameters(self):
         torch.nn.init.eye_(self.decor_weight)
+        # self.decor_conv.weight.data = (
+        #     torch.eye(self.matmulshape)
+        #     .reshape(
+        #         self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
+        #     )
+        #     .to(self.decor_conv.weight.device)
+        # )
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
-        if self.decorrelation_method == "demeaned-scaled":
-            self.input = self.bn(input.reshape(len(input), -1)).reshape(input.shape)
+        # self.undecorrelated_state = input
         self.undecorrelated_state = self.unfolder(input)
-        self.decorrelated_state = torch.einsum(
-            "bnl,nm->bml", self.undecorrelated_state, self.decor_weight
-        )
+        if self.decorrelation_method == "demeaned-scaled":
+            mid_state = self.demeaner(self.undecorrelated_state)
+            # self.decorrelated_state = self.decor_conv(mid_state)
+            self.decorrelated_state = torch.einsum(
+                "bnl,nm->bml", mid_state, self.decor_weight
+            )
+        else:
+            # self.decorrelated_state = self.decor_conv(self.undecorrelated_state)
+            self.decorrelated_state = torch.einsum(
+                "bnl,nm->bml", self.undecorrelated_state, self.decor_weight
+            )
 
-        self.compute_normalization()
-
-        return self.fwd_conv(
-            self.folder(self.normalization[None, :, None] * self.decorrelated_state)
-        )
+        return self.fwd_conv(self.folder(self.decorrelated_state))
+        # return self.fwd_conv(self.decorrelated_state)
 
     def compute_normalization(self):
+        # self.normalization = torch.sqrt(
+        #     (
+        #         torch.mean(
+        #             self.undecorrelated_state[:25, :, :] ** 2,
+        #             axis=(0, 2),
+        #         ).flatten()
+        #     )
+        # ) / (
+        #     torch.sqrt(
+        #         torch.mean(
+        #             self.decorrelated_state[:25, :, :] ** 2,
+        #             axis=(0, 2),
+        #         ).flatten()
+        #     )
+        #     + 1e-8
+        # )
         self.normalization = torch.sqrt(
             (
                 torch.mean(
                     self.undecorrelated_state[:, :, :] ** 2,
-                    axis=(0, 2),
                 ).flatten()
             )
         ) / (
             torch.sqrt(
                 torch.mean(
                     self.decorrelated_state[:, :, :] ** 2,
-                    axis=(0, 2),
                 ).flatten()
             )
             + 1e-8
@@ -216,8 +286,21 @@ class DecorConv(torch.nn.Module):
         # Conv outputs are (batch, out_channels, H, W)
 
         # Height and width dimensions are now equivalent to a batch dimension
+        num_samples = int(0.1 * len(self.undecorrelated_state)) + 1
+        self.decorrelated_state = self.decorrelated_state[:num_samples]
+        self.undecorrelated_state = self.undecorrelated_state[:num_samples]
+        # self.undecorrelated_state = self.unfolder(self.undecorrelated_state)
+
+        self.compute_normalization()
+
+        # modified_decorrelated_state = torch.permute(
+        #     self.decorrelated_state.reshape(num_samples, self.matmulshape, -1),
+        #     (0, 2, 1),
+        # ).contiguous()
+
         modified_decorrelated_state = torch.permute(
-            self.decorrelated_state, (0, 2, 1)
+            self.decorrelated_state,
+            (0, 2, 1),
         ).contiguous()
 
         modified_decorrelated_state = modified_decorrelated_state.reshape(
@@ -229,11 +312,19 @@ class DecorConv(torch.nn.Module):
             modified_decorrelated_state.transpose(0, 1) @ modified_decorrelated_state
         )
 
-        self.decor_weight.data *= self.normalization
-        w_grads = corr @ self.decor_weight.data
-
-        # Update grads of decorrelation matrix
+        self.decor_weight *= self.normalization
+        w_grads = corr @ self.decor_weight
         self.decor_weight.grad = w_grads
+
+        # self.decor_conv.weight.data *= self.normalization
+        # w_grads = corr @ self.decor_conv.weight.reshape(
+        #     self.matmulshape, self.matmulshape
+        # )
+
+        # # Update grads of decorrelation matrix
+        # self.decor_conv.weight.grad = w_grads.reshape(
+        #     self.matmulshape, self.in_shape[0], self.kernel_size, self.kernel_size
+        # )
 
         # Zero-ing the decorrelated state so that it cannot be re-used
         self.undecorrelated_state = None
@@ -246,5 +337,6 @@ class DecorConv(torch.nn.Module):
         return [] + self.fwd_conv.get_fwd_params()
 
     def get_decor_params(self):
+        # params = [self.decor_conv.weight] + self.fwd_conv.get_decor_params()
         params = [self.decor_weight] + self.fwd_conv.get_decor_params()
         return params
