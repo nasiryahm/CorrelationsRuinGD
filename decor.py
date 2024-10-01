@@ -91,9 +91,10 @@ class DecorLinear(torch.nn.Module):
         return output
 
     def compute_normalization(self):
-        self.normalization = torch.sqrt(
-            (torch.mean(self.undecorrelated_state**2))
-        ) / (torch.sqrt((torch.mean(self.decorrelated_state**2))) + 1e-8)
+        self.normalization = torch.mean(
+            torch.sqrt((torch.sum(self.undecorrelated_state**2, axis=1)))
+            / (torch.sqrt((torch.sum(self.decorrelated_state**2, axis=1))) + 1e-8)
+        )
 
     def update_grads(self, feedback) -> None:
         assert self.decorrelated_state is not None, "Call forward() first"
@@ -229,19 +230,12 @@ class DecorConv(torch.nn.Module):
         return output
 
     def compute_normalization(self):
-        self.normalization = torch.sqrt(
-            (
-                torch.mean(
-                    self.undecorrelated_state[:, :, :] ** 2,
-                ).flatten()
+        self.normalization = torch.mean(
+            torch.sqrt((torch.sum(self.undecorrelated_state[:, :, :] ** 2, axis=1)))
+            / (
+                torch.sqrt(torch.sum(self.decorrelated_state[:, :, :] ** 2, axis=1))
+                + 1e-8
             )
-        ) / (
-            torch.sqrt(
-                torch.mean(
-                    self.decorrelated_state[:, :, :] ** 2,
-                ).flatten()
-            )
-            + 1e-8
         )
 
     def update_grads(self, feedback) -> None:
