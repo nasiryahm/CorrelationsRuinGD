@@ -5,11 +5,10 @@ import torch.nn.functional as F
 import os
 import numpy as np
 from utils import *
-from models import Net, ConvNet, PerturbNet
+from models import DenseNet, ConvNet
 from bp import BPLinear, BPConv2d
-from decor import DecorLinear
 from fa import FALinear, FAConv2d
-from np import NPLinear
+from np import NPLinear, NPConv2d
 import wandb
 import hydra
 from omegaconf import OmegaConf, DictConfig
@@ -22,10 +21,8 @@ def train_network(
     device="cuda",
     bias=True,
     regularizer_strength=0.0,
-    decorrelation_method="copi",
     decor_lr=1e-3,
-    n_hidden_layers=3,
-    hidden_layer_size=1000,
+    network_type=DenseNet,
     layer_type=BPLinear,
     loss_func_type="CCE",  # "MSE"
     activation_function=torch.nn.LeakyReLU(),
@@ -74,10 +71,8 @@ def train_network(
 
     # Initialize model
     layer_kwargs = {}
-    if layer_type in [BPLinear, FALinear]:
-        model_type = Net
-    if layer_type in [NPLinear]:
-        model_type = PerturbNet
+
+    if layer_type in [NPLinear, NPConv2d]:
         distribution = torch.distributions.Normal(
             torch.tensor([0.0]).to(torch.float32).to(device),
             torch.tensor([1.0]).to(device),
@@ -87,8 +82,7 @@ def train_network(
             "sigma": 1e-6,
             "dist_sampler": dist_sampler,
         }
-    if layer_type in [BPConv2d, FAConv2d]:
-        model_type = ConvNet
+    if layer_type in [BPConv2d, FAConv2d, NPConv2d]:
         # TIN After cropping
         in_size = [3, 56, 56]
         if dataset in ["CIFAR10", "CIFAR100"]:
@@ -96,13 +90,11 @@ def train_network(
         if dataset == "MNIST":
             in_size = [1, 28, 28]
 
-    model = model_type(
+    model = network_type(
         in_size=in_size,
         out_size=out_size,
-        n_hidden_layers=n_hidden_layers,
-        hidden_size=hidden_layer_size,
         layer_type=layer_type,
-        decorrelation_method=decorrelation_method,
+        decor_lr=decor_lr,
         biases=bias,
         activation_function=activation_function,
         layer_kwargs=layer_kwargs,
@@ -112,25 +104,20 @@ def train_network(
     # Initialize metric storage
     metrics = init_metric(validation=validation)
 
-    # Define optimizers
-    fwd_optimizer = None
+    # Define optimizer
+    optimizer = None
     if optimizer_type == "Adam":
-        fwd_optimizer = torch.optim.Adam(
-            model.get_fwd_params(),
+        optimizer = torch.optim.Adam(
+            model.parameters(),
             betas=betas,
             eps=eps,
             lr=fwd_lr,
             weight_decay=regularizer_strength,
         )
     elif optimizer_type == "SGD":
-        fwd_optimizer = torch.optim.SGD(
-            model.get_fwd_params(), lr=fwd_lr, weight_decay=regularizer_strength
+        optimizer = torch.optim.SGD(
+            model.parameters(), lr=fwd_lr, weight_decay=regularizer_strength
         )
-    optimizers = [fwd_optimizer]
-
-    if decorrelation_method is not None:
-        decor_optimizer = torch.optim.SGD(model.get_decor_params(), lr=decor_lr)
-        optimizers.append(decor_optimizer)
 
     loss_func = None
     if loss_func_type == "CCE":
@@ -179,7 +166,7 @@ def train_network(
                 model,
                 device,
                 train_loader,
-                optimizers,
+                optimizer,
                 e,
                 loss_func,
                 loud=False,
@@ -205,16 +192,6 @@ def run(config: DictConfig) -> None:
         mode=config.wandb.mode,
     )
 
-    if config.decorrelation_method == "None":
-        config.decorrelation_method = None
-
-    if config.decor_lr == 0:
-        config.decorrelation_method = None
-
-    # For now foldiak is too slow unfortunately
-    if config.decorrelation_method == "foldiak":
-        exit()
-
     layer_type = BPLinear
     assert config.layer_type in [
         "BP",
@@ -224,6 +201,7 @@ def run(config: DictConfig) -> None:
         "BPConv",
         "FAConv",
         "DFAConv",
+        "NPConv",
     ], "Invalid layer type"
     if config.layer_type in ["FA", "DFA"]:
         layer_type = FALinear
@@ -233,6 +211,12 @@ def run(config: DictConfig) -> None:
         layer_type = BPConv2d
     elif config.layer_type in ["FAConv", "DFAConv"]:
         layer_type = FAConv2d
+    elif config.layer_type == "NPConv":
+        layer_type = NPConv2d
+
+    network_type = DenseNet
+    if layer_type in [BPConv2d, FAConv2d, NPConv2d]:
+        network_type = ConvNet
 
     act_func = torch.nn.LeakyReLU
     if config.layer_type == "DFA" or config.layer_type == "DFAConv":
@@ -244,10 +228,8 @@ def run(config: DictConfig) -> None:
         device=config.device,
         bias=config.bias,
         regularizer_strength=config.regularizer_strength,
-        decorrelation_method=config.decorrelation_method,
         decor_lr=config.decor_lr,
-        n_hidden_layers=config.n_hidden_layers,
-        hidden_layer_size=config.hidden_layer_size,
+        network_type=network_type,
         layer_type=layer_type,
         loss_func_type=config.loss_func_type,
         activation_function=act_func,

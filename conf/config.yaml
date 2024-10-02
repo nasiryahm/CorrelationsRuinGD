@@ -1,23 +1,20 @@
 default:
   - _self_
 
-batch_size: 256
-dataset: CIFAR10
-device: cuda:6
+batch_size: 256 #Default fixed batch size
+dataset: CIFAR10 #Options: CIFAR10, CIFAR100, TIN (TinyImageNet)
+device: cuda:4
 bias: True
-layer_type: BP
-decorrelation_method: 'copi'
-regularizer_strength: 0.0 #1e-3 #0.1 (1 is 0.1, 2 is 1e-3, 4 is 1e-6)
-decor_lr: 0.000015625 # Values for run w/ reg test for FA TIN
-fwd_lr: 0.00015625
-n_hidden_layers: 4
-hidden_layer_size: 1000
-loss_func_type: CCE
-optimizer_type: Adam
+layer_type: BP #Options: BP, NP, FA, FAConv, BPConv
+regularizer_strength: 0.0 
+decor_lr: 1e-5 #Decorrelation learning rate
+fwd_lr: 1e-4  #Forward learning rate
+loss_func_type: CCE #Options: CCE, MSE
+optimizer_type: Adam #Options: Adam, SGD - this is only for the regular network weights
 seed: 42
-nb_epochs: 100
+nb_epochs: 100 #Number of epochs
 loud: True
-validation: True
+validation: False #If True, the model will be validated on the validation set
 
 wandb:
   project: "CorrelationsRuinGD"

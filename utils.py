@@ -366,7 +366,7 @@ def train(
     model,
     device,
     train_loader,
-    optimizers,
+    optimizer,
     epoch,
     loss_func,
     log_interval=100,
@@ -375,15 +375,13 @@ def train(
 ):
     model.train()
     for batch_idx, (data, target) in enumerate(train_loader):
-        for o in optimizers:
-            o.zero_grad()
+        optimizer.zero_grad()
 
         onehots = torch.nn.functional.one_hot(target, num_classes).to(device)
         data, target = data.to(device), target.to(device)
         loss = model.train_step(data, target, onehots, loss_func)
 
-        for o in optimizers:
-            o.step()
+        optimizer.step()
         if (batch_idx % log_interval == 0) and loud:
             print(
                 "Train Epoch: {} [{}/{} ({:.0f}%)]\tLoss: {:.6f}".format(

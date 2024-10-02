@@ -49,18 +49,6 @@ class FALinear(torch.nn.Linear):
         input = input.view(input.size(0), -1)
         return FAFunction.apply(input, self.weight, self.backward, self.bias)
 
-    def get_fwd_params(self):
-        params = [self.weight]
-        if self.bias is not None:
-            params.append(self.bias)
-        return params
-
-    def get_decor_params(self):
-        return []
-
-    def update_grads(self, _):
-        pass
-
 
 class FAConv2dFunction(torch.autograd.Function):
 
@@ -132,15 +120,3 @@ class FAConv2d(torch.nn.Conv2d):
         return FAConv2dFunction.apply(
             input, self.weight, self.backward, self.bias, self.stride, self.padding
         )
-
-    def get_fwd_params(self):
-        params = [self.weight]
-        if self.bias is not None:
-            params.append(self.bias)
-        return params
-
-    def get_decor_params(self):
-        return []
-
-    def update_grads(self, _):
-        pass
