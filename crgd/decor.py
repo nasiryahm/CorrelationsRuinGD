@@ -1,7 +1,5 @@
 import torch
 import torch.nn.functional as F
-import bp
-import numpy as np
 
 
 class Decorrelator(torch.nn.Module):

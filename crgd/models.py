@@ -2,10 +2,10 @@ import torch
 import torch.nn.functional as F
 import numpy as np
 
-from decor import DecorLinear, DecorConv2d
-from fa import FALinear, FAConv2d
-from np import NPLinear, NPConv2d
-from bp import BPLinear, BPConv2d
+from .decor import DecorLinear, DecorConv2d
+from .fa import FALinear, FAConv2d
+from .np import NPLinear, NPConv2d
+from .bp import BPLinear, BPConv2d
 
 
 class DenseNet(torch.nn.Module):
@@ -207,7 +207,7 @@ class ConvNet(torch.nn.Module):
                 DecorLinear(
                     self.dense_layer_type,
                     1000,
-                    1000,
+                    out_size,
                     decor_lr=decor_lr,
                     **layer_kwargs,
                 )

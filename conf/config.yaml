@@ -5,7 +5,7 @@ batch_size: 256 #Default fixed batch size
 dataset: CIFAR10 #Options: CIFAR10, CIFAR100, TIN (TinyImageNet)
 device: cuda:4
 bias: True
-layer_type: BP #Options: BP, NP, FA, FAConv, BPConv
+layer_type: FAConv #Options: BP, NP, FA, FAConv, BPConv
 regularizer_strength: 0.0 
 decor_lr: 1e-5 #Decorrelation learning rate
 fwd_lr: 1e-4  #Forward learning rate

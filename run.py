@@ -4,11 +4,11 @@ import torchvision
 import torch.nn.functional as F
 import os
 import numpy as np
-from utils import *
-from models import DenseNet, ConvNet
-from bp import BPLinear, BPConv2d
-from fa import FALinear, FAConv2d
-from np import NPLinear, NPConv2d
+from crgd.utils import *
+from crgd.models import DenseNet, ConvNet
+from crgd.bp import BPLinear, BPConv2d
+from crgd.fa import FALinear, FAConv2d
+from crgd.np import NPLinear, NPConv2d
 import wandb
 import hydra
 from omegaconf import OmegaConf, DictConfig
