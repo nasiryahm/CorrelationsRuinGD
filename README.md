@@ -12,6 +12,8 @@ This executes a simulation as described by the parameters in `conf/config.yml`.
 
 The virtual environment setup required to run this code is provided (for anaconda) in `environment.yml`.
 
+To install this repository as a Python package, run: `pip install git+https://github.com/nasiryahm/CorrelationsRuinGD.git`.
+
 ## Integrating decorrelation layers into your own code
 
 In order to use decorrelation layers within your own codebase, see the `example.ipynb` notebook for instructions.
