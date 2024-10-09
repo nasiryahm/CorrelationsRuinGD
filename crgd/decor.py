@@ -1,10 +1,16 @@
 import torch
 import torch.nn.functional as F
+from typing import Sequence
 
 
 class Decorrelator(torch.nn.Module):
     def __init__(
-        self, num_features, lr=1e-5, mean_momentum=0.1, perc_samples=0.1, **kwargs
+        self, 
+        num_features: int, 
+        lr: float = 1e-5,
+        mean_momentum: float = 0.1,
+        perc_samples: float = 0.1,
+        **kwargs
     ):
         super(Decorrelator, self).__init__()
         self.num_features = num_features
@@ -86,36 +92,38 @@ class Decorrelator(torch.nn.Module):
 class Decorrelator2D(torch.nn.Module):
     def __init__(
         self,
-        num_features,
-        kernel_size,
-        stride,
-        padding,
-        dilation,
-        lr=1e-5,
-        mean_momentum=0.1,
-        perc_samples=0.1,
+        num_features: int,
+        kernel_size: int | Sequence[int],
+        stride: int | Sequence[int],
+        padding: int | Sequence[int],
+        dilation: int | Sequence[int],
+        lr: float = 1e-5,
+        mean_momentum: float = 0.1,
+        perc_samples: float = 0.1,
         **kwargs
     ):
         super(Decorrelator2D, self).__init__()
-        assert kernel_size % 2 == 1, "Kernel size must be odd"
         self.num_features = num_features
-        self.kernel_size = kernel_size
-        self.padding = padding
-        self.dilation = dilation
-        self.stride = stride
+        self.kernel_size = kernel_size if isinstance(kernel_size, Sequence) else (kernel_size, kernel_size)
+        self.padding = padding if isinstance(padding, Sequence) else (padding, padding)
+        self.dilation = dilation if isinstance(dilation, Sequence) else (dilation, dilation)
+        self.stride = stride if isinstance(stride, Sequence) else (stride, stride)
         self.mean_momentum = mean_momentum
         self.lr = lr
         self.perc_samples = perc_samples
 
+        # TODO: please relax this requirement and get rid of the check
+        assert kernel_size[0] % 2 == 1 and kernel_size[1] % 2 == 1, "Kernel size must be odd"
+
         # Register buffer is used for variables that are not updated during backprop
-        self.mid_dim = num_features * kernel_size * kernel_size
+        self.mid_dim = num_features * kernel_size[0] * kernel_size[1]
         self.register_buffer(
             "decor_weight",
             torch.zeros(
                 self.mid_dim,
                 num_features,
-                kernel_size,
-                kernel_size,
+                kernel_size[0],
+                kernel_size[1],
             ),
         )
         self.register_buffer("running_mean", torch.zeros(num_features))
@@ -124,7 +132,7 @@ class Decorrelator2D(torch.nn.Module):
 
     def reset_parameters(self):
         self.decor_weight = torch.eye(self.mid_dim).reshape(
-            self.mid_dim, self.num_features, self.kernel_size, self.kernel_size
+            self.mid_dim, self.num_features, self.kernel_size[0], self.kernel_size[1]
         )
         self.running_mean.zero_()
 
@@ -161,14 +169,19 @@ class Decorrelator2D(torch.nn.Module):
                     padding=self.padding,
                     stride=self.stride,
                 )
-                output_size = int(
-                    (demeaned_input.shape[-1] - self.kernel_size + 2 * self.padding)
-                    / self.stride
+                output_size_x = int(
+                    (demeaned_input.shape[-1] - self.kernel_size[0] + 2 * self.padding[0])
+                    / self.stride[0]
+                    + 1
+                )
+                output_size_y = int(
+                    (demeaned_input.shape[-1] - self.kernel_size[1] + 2 * self.padding[1])
+                    / self.stride[1]
                     + 1
                 )
                 undecor_state = torch.nn.functional.fold(
                     undecor_state,
-                    output_size=(output_size, output_size),
+                    output_size=(output_size_x, output_size_y),
                     kernel_size=(1, 1),
                 )
 
@@ -203,8 +216,8 @@ class Decorrelator2D(torch.nn.Module):
                 self.decor_weight = self.decor_weight - self.lr * decor_grad.reshape(
                     self.mid_dim,
                     self.num_features,
-                    self.kernel_size,
-                    self.kernel_size,
+                    self.kernel_size[0],
+                    self.kernel_size[1],
                 )
 
         return output
@@ -212,7 +225,13 @@ class Decorrelator2D(torch.nn.Module):
 
 class DecorLinear(torch.nn.Module):
     def __init__(
-        self, layer_type, in_features, out_features, bias=True, decor_lr=1e-5, **kwargs
+        self, 
+        layer_type: torch.nn.Module, 
+        in_features: int, 
+        out_features: int, 
+        bias: bool = True, 
+        decor_lr: float = 1e-5, 
+        **kwargs
     ) -> None:
         super(DecorLinear, self).__init__()
         self.in_features = in_features
@@ -237,26 +256,28 @@ class DecorLinear(torch.nn.Module):
 class DecorConv2d(torch.nn.Module):
     def __init__(
         self,
-        layer_type,
-        in_channels,
-        out_channels,
-        kernel_size,
-        stride=1,
-        padding=0,
-        dilation=1,
-        groups=1,
-        bias=True,
-        decor_lr=1e-5,
+        layer_type: torch.nn.Module,
+        in_channels: int,
+        out_channels: int,
+        kernel_size: int | Sequence[int],
+        stride: int | Sequence[int] = (1, 1),
+        padding: int | Sequence[int] = (0, 0),
+        dilation: int | Sequence[int] = (1, 1),
+        groups: int = 1,
+        bias: bool = True,
+        decor_lr: float = 1e-5,
         **kwargs
     ) -> None:
         super(DecorConv2d, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size
-        self.stride = stride
-        self.padding = padding
-        self.dilation = dilation
-        self.mid_dim = in_channels * kernel_size * kernel_size
+        self.kernel_size = kernel_size if isinstance(kernel_size, Sequence) else (kernel_size, kernel_size)
+        self.stride = stride if isinstance(stride, Sequence) else (stride, stride)
+        self.padding = padding if isinstance(padding, Sequence) else (padding, padding)
+        self.dilation = dilation if isinstance(dilation, Sequence) else (dilation, dilation)
+        self.mid_dim = in_channels * self.kernel_size[0] * self.kernel_size[1]
+
+        # TODO: groups is not used but may be useful in the future
 
         self.decor = Decorrelator2D(
             num_features=self.in_channels,
