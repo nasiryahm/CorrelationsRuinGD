@@ -26,6 +26,11 @@ class DenseNet(torch.nn.Module):
 
         self.layer_type = layer_type
 
+        decor_kwargs = {}
+        if layer_kwargs.get("decor_kwargs", False):
+            decor_kwargs = layer_kwargs["decor_kwargs"]
+            del layer_kwargs["decor_kwargs"]
+
         for i in range(num_hidden_layers + 1):
             in_dim = in_size if i == 0 else num_hidden_nodes
             out_dim = num_hidden_nodes if i < num_hidden_layers else out_size
@@ -34,7 +39,12 @@ class DenseNet(torch.nn.Module):
             if decor_lr != 0:
                 self.layers.append(
                     DecorLinear(
-                        layer_type, in_dim, out_dim, decor_lr=decor_lr, **layer_kwargs
+                        layer_type,
+                        in_dim,
+                        out_dim,
+                        decor_lr=decor_lr,
+                        **decor_kwargs,
+                        **layer_kwargs,
                     )
                 )
             else:
@@ -100,6 +110,10 @@ class ConvNet(torch.nn.Module):
         in_size,
         hidden_size=100,
         out_size=10,
+        num_conv_layers=4,
+        kernel_size=3,
+        padding=1,
+        stride=1,
         layer_type=BPConv2d,
         activation_function=torch.nn.LeakyReLU,
         biases=True,
@@ -118,13 +132,16 @@ class ConvNet(torch.nn.Module):
         self.in_shape = in_size
         current_shape = in_size
 
-        # Fixed conv params
-        padding = 1
-        stride = 1
-        kernel_size = 3
+        stride = stride
+        kernel_size = kernel_size
 
         # Fixed num_conv_layers
-        num_conv_layers = 4
+        assert num_conv_layers % 2 == 0, "Number of conv layers must be even"
+
+        decor_kwargs = {}
+        if layer_kwargs.get("decor_kwargs", False):
+            decor_kwargs = layer_kwargs["decor_kwargs"]
+            del layer_kwargs["decor_kwargs"]
 
         for i in range(num_conv_layers):
             in_dim = 3 if i == 0 else 32 * (2 ** (int((i - 1) / 2)))
@@ -141,6 +158,7 @@ class ConvNet(torch.nn.Module):
                         padding,
                         bias=biases,
                         decor_lr=decor_lr,
+                        **decor_kwargs,
                         **layer_kwargs,
                     )
                 )
@@ -187,6 +205,7 @@ class ConvNet(torch.nn.Module):
                     int(np.prod(current_shape)),
                     1000,
                     decor_lr=decor_lr,
+                    **decor_kwargs,
                     **layer_kwargs,
                 )
             )
@@ -209,6 +228,7 @@ class ConvNet(torch.nn.Module):
                     1000,
                     out_size,
                     decor_lr=decor_lr,
+                    **decor_kwargs,
                     **layer_kwargs,
                 )
             )

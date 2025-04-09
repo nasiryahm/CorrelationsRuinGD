@@ -5,11 +5,12 @@ from typing import Sequence
 
 class Decorrelator(torch.nn.Module):
     def __init__(
-        self, 
-        num_features: int, 
+        self,
+        num_features: int,
         lr: float = 1e-5,
         mean_momentum: float = 0.1,
         perc_samples: float = 0.1,
+        unit_wise_normalization: bool = False,
         **kwargs
     ):
         super(Decorrelator, self).__init__()
@@ -17,6 +18,7 @@ class Decorrelator(torch.nn.Module):
         self.mean_momentum = mean_momentum
         self.lr = lr
         self.perc_samples = perc_samples
+        self.unit_wise_normalization = unit_wise_normalization
 
         # Register buffer is used for variables that are not updated during backprop
         self.register_buffer("decor_weight", torch.eye(num_features))
@@ -33,12 +35,13 @@ class Decorrelator(torch.nn.Module):
     def demean(self, input):
         # Demeaning
         if self.training:
-            mean = torch.mean(input, axis=0)
-            while len(mean.shape) > 1:
-                mean = torch.mean(mean, axis=-1)
-            self.running_mean = (
-                1 - self.mean_momentum
-            ) * self.running_mean + self.mean_momentum * mean
+            with torch.no_grad():
+                mean = torch.mean(input, axis=0)
+                while len(mean.shape) > 1:
+                    mean = torch.mean(mean, axis=-1)
+                self.running_mean = (
+                    1 - self.mean_momentum
+                ) * self.running_mean + self.mean_momentum * mean
         else:
             mean = self.running_mean
 
@@ -75,11 +78,17 @@ class Decorrelator(torch.nn.Module):
                     decor_state.transpose(0, 1) @ decor_state
                 )
 
-                # Compute the normalization
-                normalization = torch.mean(
-                    torch.sqrt((torch.sum(undecor_state**2, axis=1)))
-                    / (torch.sqrt((torch.sum(decor_state**2, axis=1)) + 1e-8))
-                )
+                if self.unit_wise_normalization:
+                    normalization = torch.sqrt(
+                        (torch.mean(undecor_state**2, axis=0))
+                    ) / (torch.sqrt((torch.mean(decor_state**2, axis=0)) + 1e-8))
+                    normalization = 0.99 + 0.01 * normalization[:, None]
+                else:
+                    # Compute the normalization
+                    normalization = torch.mean(
+                        torch.sqrt((torch.sum(undecor_state**2, axis=1)))
+                        / (torch.sqrt((torch.sum(decor_state**2, axis=1)) + 1e-8))
+                    )
 
                 # Update the decorrelation matrix
                 self.decor_weight = self.decor_weight * normalization
@@ -100,20 +109,30 @@ class Decorrelator2D(torch.nn.Module):
         lr: float = 1e-5,
         mean_momentum: float = 0.1,
         perc_samples: float = 0.1,
+        unit_wise_normalization: bool = False,
         **kwargs
     ):
         super(Decorrelator2D, self).__init__()
         self.num_features = num_features
-        self.kernel_size = kernel_size if isinstance(kernel_size, Sequence) else (kernel_size, kernel_size)
+        self.kernel_size = (
+            kernel_size
+            if isinstance(kernel_size, Sequence)
+            else (kernel_size, kernel_size)
+        )
         self.padding = padding if isinstance(padding, Sequence) else (padding, padding)
-        self.dilation = dilation if isinstance(dilation, Sequence) else (dilation, dilation)
+        self.dilation = (
+            dilation if isinstance(dilation, Sequence) else (dilation, dilation)
+        )
         self.stride = stride if isinstance(stride, Sequence) else (stride, stride)
         self.mean_momentum = mean_momentum
         self.lr = lr
         self.perc_samples = perc_samples
+        self.unit_wise_normalization = unit_wise_normalization
 
         # TODO: please relax this requirement and get rid of the check
-        assert kernel_size[0] % 2 == 1 and kernel_size[1] % 2 == 1, "Kernel size must be odd"
+        assert (
+            kernel_size[0] % 2 == 1 and kernel_size[1] % 2 == 1
+        ), "Kernel size must be odd"
 
         # Register buffer is used for variables that are not updated during backprop
         self.mid_dim = num_features * kernel_size[0] * kernel_size[1]
@@ -158,7 +177,7 @@ class Decorrelator2D(torch.nn.Module):
         if self.training:
             with torch.no_grad():
                 # Sub-sample the data
-                num_samples = int(0.1 * len(input)) + 1
+                num_samples = int(self.perc_samples * len(input)) + 1
                 undecor_state = input[:num_samples]
                 decor_state = output[:num_samples]
 
@@ -170,12 +189,20 @@ class Decorrelator2D(torch.nn.Module):
                     stride=self.stride,
                 )
                 output_size_x = int(
-                    (demeaned_input.shape[-1] - self.kernel_size[0] + 2 * self.padding[0])
+                    (
+                        demeaned_input.shape[-1]
+                        - self.kernel_size[0]
+                        + 2 * self.padding[0]
+                    )
                     / self.stride[0]
                     + 1
                 )
                 output_size_y = int(
-                    (demeaned_input.shape[-1] - self.kernel_size[1] + 2 * self.padding[1])
+                    (
+                        demeaned_input.shape[-1]
+                        - self.kernel_size[1]
+                        + 2 * self.padding[1]
+                    )
                     / self.stride[1]
                     + 1
                 )
@@ -185,11 +212,19 @@ class Decorrelator2D(torch.nn.Module):
                     kernel_size=(1, 1),
                 )
 
-                # Compute the normalization
-                normalization = torch.mean(
-                    torch.sqrt((torch.sum(undecor_state**2, axis=1)))
-                    / (torch.sqrt((torch.sum(decor_state**2, axis=1)) + 1e-8))
-                )
+                if self.unit_wise_normalization:
+                    normalization = torch.sqrt(
+                        ((undecor_state**2).mean(dim=0).mean(dim=-1).mean(dim=-1))
+                    ) / torch.sqrt(
+                        (decor_state**2).mean(dim=0).mean(dim=-1).mean(dim=-1)
+                    )
+                    normalization = 0.99 + 0.01 * normalization[:, None, None, None]
+                else:
+                    # Compute the normalization
+                    normalization = torch.mean(
+                        torch.sqrt((torch.sum(undecor_state**2, axis=1)))
+                        / (torch.sqrt((torch.sum(decor_state**2, axis=1)) + 1e-8))
+                    )
 
                 # Set up patches as if they are batch-samples
                 mod_decor_state = (
@@ -225,12 +260,13 @@ class Decorrelator2D(torch.nn.Module):
 
 class DecorLinear(torch.nn.Module):
     def __init__(
-        self, 
-        layer_type: torch.nn.Module, 
-        in_features: int, 
-        out_features: int, 
-        bias: bool = True, 
-        decor_lr: float = 1e-5, 
+        self,
+        layer_type: torch.nn.Module,
+        in_features: int,
+        out_features: int,
+        bias: bool = True,
+        decor_lr: float = 1e-5,
+        unit_wise_normalization: bool = False,
         **kwargs
     ) -> None:
         super(DecorLinear, self).__init__()
@@ -239,6 +275,7 @@ class DecorLinear(torch.nn.Module):
         self.decor = Decorrelator(
             self.in_features,
             lr=decor_lr,
+            unit_wise_normalization=unit_wise_normalization,
         )
 
         self.linear = layer_type(
@@ -266,15 +303,22 @@ class DecorConv2d(torch.nn.Module):
         groups: int = 1,
         bias: bool = True,
         decor_lr: float = 1e-5,
+        unit_wise_normalization: bool = False,
         **kwargs
     ) -> None:
         super(DecorConv2d, self).__init__()
         self.in_channels = in_channels
         self.out_channels = out_channels
-        self.kernel_size = kernel_size if isinstance(kernel_size, Sequence) else (kernel_size, kernel_size)
+        self.kernel_size = (
+            kernel_size
+            if isinstance(kernel_size, Sequence)
+            else (kernel_size, kernel_size)
+        )
         self.stride = stride if isinstance(stride, Sequence) else (stride, stride)
         self.padding = padding if isinstance(padding, Sequence) else (padding, padding)
-        self.dilation = dilation if isinstance(dilation, Sequence) else (dilation, dilation)
+        self.dilation = (
+            dilation if isinstance(dilation, Sequence) else (dilation, dilation)
+        )
         self.mid_dim = in_channels * self.kernel_size[0] * self.kernel_size[1]
 
         # TODO: groups is not used but may be useful in the future
@@ -286,6 +330,7 @@ class DecorConv2d(torch.nn.Module):
             padding=self.padding,
             dilation=self.dilation,
             decor_lr=decor_lr,
+            unit_wise_normalization=unit_wise_normalization,
         )
 
         self.conv = layer_type(

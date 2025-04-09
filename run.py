@@ -22,6 +22,7 @@ def train_network(
     bias=True,
     regularizer_strength=0.0,
     decor_lr=1e-3,
+    unit_wise_normalization=False,
     network_type=DenseNet,
     layer_type=BPLinear,
     loss_func_type="CCE",  # "MSE"
@@ -35,7 +36,7 @@ def train_network(
     validation=False,
 ):
 
-    betas = [0.9, 0.9999]
+    betas = [0.9, 0.999]
     eps = 1e-8
 
     # Initializing random seeding
@@ -68,9 +69,14 @@ def train_network(
         # After cropping
         in_size = 56 * 56 * 3
         out_size = 200
+    if tv_dataset == "ImageNet":
+        in_size = 224 * 224 * 3
+        out_size = 1000
 
     # Initialize model
     layer_kwargs = {}
+
+    layer_kwargs["decor_kwargs"] = {"unit_wise_normalization": unit_wise_normalization}
 
     if layer_type in [NPLinear, NPConv2d]:
         distribution = torch.distributions.Normal(
@@ -83,12 +89,23 @@ def train_network(
             "dist_sampler": dist_sampler,
         }
     if layer_type in [BPConv2d, FAConv2d, NPConv2d]:
-        # TIN After cropping
-        in_size = [3, 56, 56]
+        if dataset == "ImageNet":
+            in_size = [3, 224, 224]
+        if dataset == "TIN":
+            in_size = [3, 56, 56]
         if dataset in ["CIFAR10", "CIFAR100"]:
             in_size = [3, 32, 32]
         if dataset == "MNIST":
             in_size = [1, 28, 28]
+
+    model_kwargs = {}
+    if dataset == "ImageNet" and layer_type in [BPConv2d, FAConv2d, NPConv2d]:
+        model_kwargs = {
+            "num_conv_layers": 4,
+            "padding": 1,
+            "kernel_size": 5,
+            "stride": 2,
+        }
 
     model = network_type(
         in_size=in_size,
@@ -98,6 +115,7 @@ def train_network(
         biases=bias,
         activation_function=activation_function,
         layer_kwargs=layer_kwargs,
+        **model_kwargs,
     )
     model.to(device)
 
@@ -116,7 +134,10 @@ def train_network(
         )
     elif optimizer_type == "SGD":
         optimizer = torch.optim.SGD(
-            model.parameters(), lr=fwd_lr, weight_decay=regularizer_strength
+            model.parameters(),
+            lr=fwd_lr,
+            momentum=0.9,
+            weight_decay=regularizer_strength,
         )
 
     loss_func = None
@@ -135,19 +156,21 @@ def train_network(
     if validation:
         test_val = "val"
     for e in tqdm(range(nb_epochs + 1), disable=not loud):
-        metrics = update_metrics(
-            model,
-            metrics,
-            device,
-            "train",
-            train_loader,
-            loss_func,
-            e,
-            loud=loud,
-            wandb=wandb,
-            top5=(dataset == "TIN"),
-            num_classes=out_size,
-        )
+        if dataset != "ImageNet":
+            # Too expensive for imagenet
+            metrics = update_metrics(
+                model,
+                metrics,
+                device,
+                "train",
+                train_loader,
+                loss_func,
+                e,
+                loud=loud,
+                wandb=wandb,
+                top5=(dataset == "TIN" or dataset == "ImageNet"),
+                num_classes=out_size,
+            )
         metrics = update_metrics(
             model,
             metrics,
@@ -158,9 +181,12 @@ def train_network(
             e,
             loud=loud,
             wandb=wandb,
-            top5=(dataset == "TIN"),
+            top5=(dataset == "TIN" or dataset == "ImageNet"),
             num_classes=out_size,
         )
+        if np.isnan(metrics[test_val]["loss"][-1]):
+            print("NaN detected, aborting training")
+            break
         if e < nb_epochs:
             train(
                 model,
@@ -172,11 +198,6 @@ def train_network(
                 loud=False,
                 num_classes=out_size,
             )
-        if np.isnan(metrics[test_val]["loss"][-1]) or np.isnan(
-            metrics["train"]["loss"][-1]
-        ):
-            print("NaN detected, aborting training")
-            break
     return metrics
 
 
@@ -229,6 +250,7 @@ def run(config: DictConfig) -> None:
         bias=config.bias,
         regularizer_strength=config.regularizer_strength,
         decor_lr=config.decor_lr,
+        unit_wise_normalization=config.unit_wise_normalization,
         network_type=network_type,
         layer_type=layer_type,
         loss_func_type=config.loss_func_type,

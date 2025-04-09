@@ -4,6 +4,8 @@ import torch.nn.functional as F
 from torchvision.transforms import v2
 import os
 import numpy as np
+from glob import glob
+from PIL import Image
 
 
 class F_ST_LeakyReLU(torch.autograd.Function):
@@ -85,7 +87,61 @@ def format_tin_val(datadir):
     print("Formatting val done")
 
 
-def load_dataset(dataset_importer, device, fltype, validation, mean, std):
+class ImageNet(torch.utils.data.Dataset):
+    """root: path to the ILSVRC folder"""
+
+    def __init__(
+        self,
+        root,
+        class_maping_path,
+        transform=None,
+        n_classes=1000,
+        downsample_factor=1,
+    ):
+        self.samples = []
+        self.targets = []
+        self.transform = transform
+        self.n_classes = n_classes
+
+        class_mapping = self._get_class_mapping(class_maping_path)
+
+        for n in glob(os.path.join(root, "*")):  # [:n_classes]:
+            label = class_mapping.get(n[-9:])
+            if label == None:
+                continue  # extract folder name that corresponds to a class
+            for f in glob(os.path.join(n, "*")):
+                self.samples.append(f)
+                self.targets.append(label)
+
+        # Downsample dataset
+        num_samples = len(self.samples)
+        num_to_select = int(downsample_factor * num_samples)
+        random_indices = np.random.choice(num_samples, num_to_select, replace=False)
+        # Select the corresponding samples and targets
+        self.samples = [self.samples[i] for i in random_indices]
+        self.targets = [self.targets[i] for i in random_indices]
+
+    def __len__(self):
+        return len(self.samples)
+
+    def __getitem__(self, idx):
+        x = Image.open(self.samples[idx]).convert("RGB")
+        if self.transform:
+            x = self.transform(x)
+        return x, self.targets[idx]
+
+    def _get_class_mapping(self, synsets):
+        class_mapping = {}
+
+        with open(synsets, "r") as f:
+            for i, line in enumerate(f.readlines()[: self.n_classes]):
+                values = line.split(" ")
+                class_mapping.update({values[0]: i})
+
+        return class_mapping
+
+
+def load_dataset(dataset_importer, device, fltype, validation):
     if dataset_importer == "TIN":
 
         if os.path.exists("./datasets/tiny-imagenet-200/y_train.npy"):
@@ -143,7 +199,6 @@ def load_dataset(dataset_importer, device, fltype, validation, mean, std):
 
             np.save("./datasets/tiny-imagenet-200/x_train.npy", x_train)
             np.save("./datasets/tiny-imagenet-200/y_train.npy", y_train)
-
     else:
         train_dataset = dataset_importer("./datasets/", train=True, download=True)
         test_dataset = dataset_importer("./datasets/", train=False, download=True)
@@ -266,8 +321,46 @@ def construct_dataloaders(
         test_loader = torch.utils.data.DataLoader(
             testset, batch_size=batch_size, shuffle=False, num_workers=4
         )
-    else:
-        # if tv_dataset == "TIN":
+    elif tv_dataset == "ImageNet":
+        mean = (0.485, 0.456, 0.406)
+        std = (0.229, 0.224, 0.225)
+
+        train_transforms = v2.Compose(
+            [
+                v2.Resize(256),
+                v2.RandomResizedCrop(224),
+                v2.RandomHorizontalFlip(),
+                v2.ToTensor(),
+                v2.Normalize(mean, std),
+            ]
+        )
+
+        test_transforms = v2.Compose(
+            [v2.Resize(256), v2.CenterCrop(224), v2.ToTensor(), v2.Normalize(mean, std)]
+        )
+        train_dataset = ImageNet(
+            root="/scratch/fast/sander/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/train",
+            class_maping_path="/scratch/fast/sander/imagenet-object-localization-challenge/ILSVRC/LOC_synset_mapping.txt",
+            transform=train_transforms,
+            n_classes=1000,
+            downsample_factor=1.0,
+        )
+        test_dataset = ImageNet(
+            root="/scratch/fast/sander/imagenet-object-localization-challenge/ILSVRC/Data/CLS-LOC/val2",
+            class_maping_path="/scratch/fast/sander/imagenet-object-localization-challenge/ILSVRC/LOC_synset_mapping.txt",
+            transform=test_transforms,
+            n_classes=1000,
+            downsample_factor=1.0,
+        )
+
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True, num_workers=6
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False, num_workers=6
+        )
+
+    elif tv_dataset == "TIN":
         train_transforms = v2.Compose(
             [v2.RandomHorizontalFlip(p=0.5), v2.RandomCrop(56)]
         )
@@ -280,8 +373,12 @@ def construct_dataloaders(
         train_dataset = ClassificationLoadedDataset(x_train, y_train, train_transforms)
         test_dataset = ClassificationLoadedDataset(x_test, y_test, test_transforms)
 
-        train_loader = torch.utils.data.DataLoader(train_dataset, **train_kwargs)
-        test_loader = torch.utils.data.DataLoader(test_dataset, **test_kwargs)
+        train_loader = torch.utils.data.DataLoader(
+            train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
+        )
+        test_loader = torch.utils.data.DataLoader(
+            test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+        )
 
     return train_loader, test_loader
 
@@ -319,6 +416,14 @@ def test(
                 100.0 * correct / len(test_loader.dataset),
             )
         )
+        if top5:
+            print(
+                "Top-5 Accuracy: {}/{} ({:.0f}%)\n".format(
+                    top5_correct,
+                    len(test_loader.dataset),
+                    100.0 * top5_correct / len(test_loader.dataset),
+                )
+            )
 
     if top5:
         return (
