@@ -20,9 +20,9 @@ def train_network(
     dataset="MNIST",
     device="cuda",
     bias=True,
+    batch_norm=False,
     regularizer_strength=0.0,
     decor_lr=1e-3,
-    unit_wise_normalization=False,
     network_type=DenseNet,
     layer_type=BPLinear,
     loss_func_type="CCE",  # "MSE"
@@ -76,8 +76,6 @@ def train_network(
     # Initialize model
     layer_kwargs = {}
 
-    layer_kwargs["decor_kwargs"] = {"unit_wise_normalization": unit_wise_normalization}
-
     if layer_type in [NPLinear, NPConv2d]:
         distribution = torch.distributions.Normal(
             torch.tensor([0.0]).to(torch.float32).to(device),
@@ -113,6 +111,7 @@ def train_network(
         layer_type=layer_type,
         decor_lr=decor_lr,
         biases=bias,
+        batch_norm=batch_norm,
         activation_function=activation_function,
         layer_kwargs=layer_kwargs,
         **model_kwargs,
@@ -248,9 +247,9 @@ def run(config: DictConfig) -> None:
         dataset=config.dataset,
         device=config.device,
         bias=config.bias,
+        batch_norm=config.batch_norm,
         regularizer_strength=config.regularizer_strength,
         decor_lr=config.decor_lr,
-        unit_wise_normalization=config.unit_wise_normalization,
         network_type=network_type,
         layer_type=layer_type,
         loss_func_type=config.loss_func_type,

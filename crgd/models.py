@@ -16,6 +16,7 @@ class DenseNet(torch.nn.Module):
         layer_type=BPLinear,
         activation_function=torch.nn.LeakyReLU,
         biases=True,
+        batch_norm=False,
         decor_lr=1e-5,
         layer_kwargs={},
     ):
@@ -34,6 +35,9 @@ class DenseNet(torch.nn.Module):
         for i in range(num_hidden_layers + 1):
             in_dim = in_size if i == 0 else num_hidden_nodes
             out_dim = num_hidden_nodes if i < num_hidden_layers else out_size
+
+            if batch_norm:
+                self.layers.append(torch.nn.BatchNorm1d(in_dim))
 
             # Add decorrelation layer
             if decor_lr != 0:
@@ -93,7 +97,7 @@ class DenseNet(torch.nn.Module):
 
     def test_step(self, data, target, onehots, loss_func):
         self.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             if self.layer_type == NPLinear:
                 output = self(torch.cat([data, data.clone()]))
             else:
@@ -117,6 +121,7 @@ class ConvNet(torch.nn.Module):
         layer_type=BPConv2d,
         activation_function=torch.nn.LeakyReLU,
         biases=True,
+        batch_norm=False,
         decor_lr=1e-5,
         layer_kwargs={},
     ):
@@ -146,6 +151,9 @@ class ConvNet(torch.nn.Module):
         for i in range(num_conv_layers):
             in_dim = 3 if i == 0 else 32 * (2 ** (int((i - 1) / 2)))
             out_dim = 32 * (2 ** (int(i / 2)))
+
+            if batch_norm:
+                self.layers.append(torch.nn.BatchNorm2d(in_dim))
 
             if decor_lr != 0:
                 self.layers.append(
@@ -198,6 +206,9 @@ class ConvNet(torch.nn.Module):
         # Adding a flatten layer at the end of convs
         self.layers.append(torch.nn.Flatten())
 
+        if batch_norm:
+            self.layers.append(torch.nn.BatchNorm1d(int(np.prod(current_shape))))
+
         if decor_lr != 0:
             self.layers.append(
                 DecorLinear(
@@ -220,6 +231,9 @@ class ConvNet(torch.nn.Module):
             )
 
         self.layers.append(activation_function())
+
+        if batch_norm:
+            self.layers.append(torch.nn.BatchNorm1d(1000))
 
         if decor_lr != 0:
             self.layers.append(
@@ -275,7 +289,7 @@ class ConvNet(torch.nn.Module):
 
     def test_step(self, data, target, onehots, loss_func):
         self.eval()
-        with torch.inference_mode():
+        with torch.no_grad():
             if self.layer_type == NPConv2d:
                 output = self(torch.cat([data, data.clone()]))
             else:

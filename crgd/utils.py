@@ -449,6 +449,7 @@ def update_metrics(
     top5=False,
     num_classes=10,
 ):
+    model.eval()
     loss, acc = test(
         model, device, train_test, loader, loud, loss_func, top5, num_classes
     )

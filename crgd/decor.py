@@ -4,13 +4,13 @@ from typing import Sequence
 
 
 class Decorrelator(torch.nn.Module):
+
     def __init__(
         self,
         num_features: int,
         lr: float = 1e-5,
         mean_momentum: float = 0.1,
         perc_samples: float = 0.1,
-        unit_wise_normalization: bool = False,
         **kwargs
     ):
         super(Decorrelator, self).__init__()
@@ -18,11 +18,13 @@ class Decorrelator(torch.nn.Module):
         self.mean_momentum = mean_momentum
         self.lr = lr
         self.perc_samples = perc_samples
-        self.unit_wise_normalization = unit_wise_normalization
+
+        self.update = None
 
         # Register buffer is used for variables that are not updated during backprop
         self.register_buffer("decor_weight", torch.eye(num_features))
         self.register_buffer("running_mean", torch.zeros(num_features))
+        self.register_buffer("I", torch.eye(num_features))
 
         self.reset_parameters()
 
@@ -30,70 +32,35 @@ class Decorrelator(torch.nn.Module):
         self.decor_weight = torch.eye(
             self.num_features, device=self.decor_weight.device
         )
+        self.I = torch.eye(self.num_features, device=self.decor_weight.device)
         self.running_mean.zero_()
-
-    def demean(self, input):
-        # Demeaning
-        if self.training:
-            with torch.no_grad():
-                mean = torch.mean(input, axis=0)
-                while len(mean.shape) > 1:
-                    mean = torch.mean(mean, axis=-1)
-                self.running_mean = (
-                    1 - self.mean_momentum
-                ) * self.running_mean + self.mean_momentum * mean
-        else:
-            mean = self.running_mean
-
-        mean = mean[None, :]
-        while len(mean.shape) < len(input.shape):
-            mean = mean.unsqueeze(-1)
-
-        return input - mean
 
     def forward(self, input):
         assert self.num_features == input.shape[1], "Input shape mismatch"
 
-        # Demean
-        demeaned_input = self.demean(input)
-
         # Decorrelation
-        output = torch.einsum("ni...,ij->nj...", demeaned_input, self.decor_weight)
+        output = torch.einsum("ji, ni...->nj...", self.decor_weight, input)
         if self.training:
             with torch.no_grad():
                 # Sub-sample the data
                 num_samples = int(self.perc_samples * len(input)) + 1
-                undecor_state = input[:num_samples]
                 decor_state = output[:num_samples]
 
                 # Reshape data if there are multiple channels
                 if len(decor_state.shape) > 2:
                     decor_state = decor_state.permute(0, 2, 3, 1)
-                    undecor_state = undecor_state.permute(0, 2, 3, 1)
                     decor_state = decor_state.reshape(-1, decor_state.shape[-1])
-                    undecor_state = undecor_state.reshape(-1, undecor_state.shape[-1])
 
                 # Compute the correlation matrix
                 corr = (1 / len(decor_state)) * (
                     decor_state.transpose(0, 1) @ decor_state
                 )
 
-                if self.unit_wise_normalization:
-                    normalization = torch.sqrt(
-                        (torch.mean(undecor_state**2, axis=0))
-                    ) / (torch.sqrt((torch.mean(decor_state**2, axis=0)) + 1e-8))
-                    normalization = 0.99 + 0.01 * normalization[:, None]
-                else:
-                    # Compute the normalization
-                    normalization = torch.mean(
-                        torch.sqrt((torch.sum(undecor_state**2, axis=1)))
-                        / (torch.sqrt((torch.sum(decor_state**2, axis=1)) + 1e-8))
-                    )
-
                 # Update the decorrelation matrix
-                self.decor_weight = self.decor_weight * normalization
-                decor_grad = corr @ self.decor_weight
+                corr_distance = corr - self.I
+                decor_grad = corr_distance @ self.decor_weight
                 self.decor_weight = self.decor_weight - self.lr * decor_grad
+                self.update = self.I - self.lr * corr_distance
 
         return output
 
@@ -109,7 +76,6 @@ class Decorrelator2D(torch.nn.Module):
         lr: float = 1e-5,
         mean_momentum: float = 0.1,
         perc_samples: float = 0.1,
-        unit_wise_normalization: bool = False,
         **kwargs
     ):
         super(Decorrelator2D, self).__init__()
@@ -127,7 +93,6 @@ class Decorrelator2D(torch.nn.Module):
         self.mean_momentum = mean_momentum
         self.lr = lr
         self.perc_samples = perc_samples
-        self.unit_wise_normalization = unit_wise_normalization
 
         # TODO: please relax this requirement and get rid of the check
         assert (
@@ -145,28 +110,34 @@ class Decorrelator2D(torch.nn.Module):
                 kernel_size[1],
             ),
         )
+        self.register_buffer(
+            "I",
+            torch.zeros(
+                self.mid_dim,
+                self.mid_dim,
+            ),
+        )
         self.register_buffer("running_mean", torch.zeros(num_features))
+        self.update = None
 
         self.reset_parameters()
 
     def reset_parameters(self):
-        self.decor_weight = torch.eye(self.mid_dim).reshape(
-            self.mid_dim, self.num_features, self.kernel_size[0], self.kernel_size[1]
+        self.decor_weight = torch.eye(self.mid_dim).view(
+            self.mid_dim,
+            self.num_features,
+            self.kernel_size[0],
+            self.kernel_size[1],
         )
+        self.I = torch.eye(self.mid_dim, device=self.decor_weight.device)
         self.running_mean.zero_()
-
-    def demean(self, input):
-        return Decorrelator.demean(self, input)
 
     def forward(self, input):
         assert self.num_features == input.shape[1], "Input shape mismatch"
 
-        # Demean
-        demeaned_input = self.demean(input)
-
         # Decorrelation
         output = F.conv2d(
-            demeaned_input,
+            input,
             self.decor_weight,
             stride=self.stride,
             padding=self.padding,
@@ -178,63 +149,13 @@ class Decorrelator2D(torch.nn.Module):
             with torch.no_grad():
                 # Sub-sample the data
                 num_samples = int(self.perc_samples * len(input)) + 1
-                undecor_state = input[:num_samples]
                 decor_state = output[:num_samples]
 
-                # Patchifying the data
-                undecor_state = torch.nn.functional.unfold(
-                    undecor_state,
-                    self.kernel_size,
-                    padding=self.padding,
-                    stride=self.stride,
-                )
-                output_size_x = int(
-                    (
-                        demeaned_input.shape[-1]
-                        - self.kernel_size[0]
-                        + 2 * self.padding[0]
-                    )
-                    / self.stride[0]
-                    + 1
-                )
-                output_size_y = int(
-                    (
-                        demeaned_input.shape[-1]
-                        - self.kernel_size[1]
-                        + 2 * self.padding[1]
-                    )
-                    / self.stride[1]
-                    + 1
-                )
-                undecor_state = torch.nn.functional.fold(
-                    undecor_state,
-                    output_size=(output_size_x, output_size_y),
-                    kernel_size=(1, 1),
-                )
-
-                if self.unit_wise_normalization:
-                    normalization = torch.sqrt(
-                        ((undecor_state**2).mean(dim=0).mean(dim=-1).mean(dim=-1))
-                    ) / torch.sqrt(
-                        (decor_state**2).mean(dim=0).mean(dim=-1).mean(dim=-1)
-                    )
-                    normalization = 0.99 + 0.01 * normalization[:, None, None, None]
-                else:
-                    # Compute the normalization
-                    normalization = torch.mean(
-                        torch.sqrt((torch.sum(undecor_state**2, axis=1)))
-                        / (torch.sqrt((torch.sum(decor_state**2, axis=1)) + 1e-8))
-                    )
-
                 # Set up patches as if they are batch-samples
+                # Permuting this data is easier than permuting every matrix instead
                 mod_decor_state = (
-                    torch.permute(
-                        decor_state.reshape(num_samples, self.mid_dim, -1),
-                        (0, 2, 1),
-                    )
-                    .contiguous()
-                    .reshape(-1, self.mid_dim)
-                )
+                    torch.permute(decor_state, (0, 2, 3, 1)).reshape(-1, self.mid_dim)
+                ).contiguous()
 
                 # Compute the correlation matrix
                 corr = (1 / len(mod_decor_state)) * (
@@ -242,13 +163,16 @@ class Decorrelator2D(torch.nn.Module):
                 )
 
                 # Update the decorrelation matrix
-                self.decor_weight = self.decor_weight * normalization
-                decor_grad = corr @ self.decor_weight.reshape(
-                    self.mid_dim, self.mid_dim
-                )
+                corr_dist = corr - self.I
 
                 # Assign the update
-                self.decor_weight = self.decor_weight - self.lr * decor_grad.reshape(
+                self.update = self.I - self.lr * corr_dist
+
+                new_decor_weight = self.update @ (
+                    self.decor_weight.view(self.mid_dim, -1)
+                )
+
+                self.decor_weight = new_decor_weight.reshape(
                     self.mid_dim,
                     self.num_features,
                     self.kernel_size[0],
@@ -259,6 +183,7 @@ class Decorrelator2D(torch.nn.Module):
 
 
 class DecorLinear(torch.nn.Module):
+
     def __init__(
         self,
         layer_type: torch.nn.Module,
@@ -266,7 +191,6 @@ class DecorLinear(torch.nn.Module):
         out_features: int,
         bias: bool = True,
         decor_lr: float = 1e-5,
-        unit_wise_normalization: bool = False,
         **kwargs
     ) -> None:
         super(DecorLinear, self).__init__()
@@ -275,7 +199,6 @@ class DecorLinear(torch.nn.Module):
         self.decor = Decorrelator(
             self.in_features,
             lr=decor_lr,
-            unit_wise_normalization=unit_wise_normalization,
         )
 
         self.linear = layer_type(
@@ -286,11 +209,20 @@ class DecorLinear(torch.nn.Module):
         return "DecorLinear"
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        # We only want to include the inverse after any updates are done
+        if self.decor.update is not None:
+            with torch.no_grad():
+                inverse = torch.inverse(self.decor.update)
+                self.linear.weight.data = self.linear.weight.data @ inverse
+                self.decor.update = None
+
         decor_input = self.decor(input)
-        return self.linear(decor_input)
+        output = self.linear(decor_input)
+        return output
 
 
 class DecorConv2d(torch.nn.Module):
+
     def __init__(
         self,
         layer_type: torch.nn.Module,
@@ -303,7 +235,6 @@ class DecorConv2d(torch.nn.Module):
         groups: int = 1,
         bias: bool = True,
         decor_lr: float = 1e-5,
-        unit_wise_normalization: bool = False,
         **kwargs
     ) -> None:
         super(DecorConv2d, self).__init__()
@@ -322,15 +253,13 @@ class DecorConv2d(torch.nn.Module):
         self.mid_dim = in_channels * self.kernel_size[0] * self.kernel_size[1]
 
         # TODO: groups is not used but may be useful in the future
-
         self.decor = Decorrelator2D(
             num_features=self.in_channels,
             kernel_size=self.kernel_size,
             stride=self.stride,
             padding=self.padding,
             dilation=self.dilation,
-            decor_lr=decor_lr,
-            unit_wise_normalization=unit_wise_normalization,
+            lr=decor_lr,
         )
 
         self.conv = layer_type(
@@ -342,10 +271,21 @@ class DecorConv2d(torch.nn.Module):
             bias=bias,
             **kwargs
         )
+        self.counter = 0
 
     def __str__(self):
         return "DecorConv2d"
 
     def forward(self, input: torch.Tensor) -> torch.Tensor:
+        with torch.no_grad():
+            if self.decor.update is not None:
+                self.conv.weight.data = (
+                    self.conv.weight.data.squeeze() @ torch.inverse(self.decor.update)
+                ).view(self.conv.weight.data.shape)
+
+                self.decor.update = None
+
         decor_input = self.decor(input)
-        return self.conv(decor_input)
+        output = self.conv(decor_input)
+
+        return output

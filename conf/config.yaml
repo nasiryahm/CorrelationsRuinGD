@@ -1,21 +1,21 @@
 default:
   - _self_
 
-batch_size: 64 #Default fixed batch size
-dataset: ImageNet #Options: CIFAR10, CIFAR100, TIN (TinyImageNet)
-device: cuda:4
+batch_size: 256 #Default fixed batch size
+dataset: CIFAR10 #ImageNet #Options: CIFAR10, CIFAR100, TIN (TinyImageNet)
+device: cuda:6
 bias: True
 layer_type: BPConv #Options: BP, NP, FA, FAConv, BPConv
 regularizer_strength: 0.0 
-decor_lr: 0.0 #Decorrelation learning rate
-fwd_lr: 1e-1  #Forward learning rate
+decor_lr: 1e-3 #1e-4 #1e-4 #1e-4 #Decorrelation learning rate
+fwd_lr: 1e-3  #Forward learning rate
+batch_norm: False #If True, the model will be trained with batch normalization
 loss_func_type: CCE #Options: CCE, MSE
-optimizer_type: SGD #Options: Adam, SGD - this is only for the regular network weights
+optimizer_type: Adam #Options: Adam, SGD - this is only for the regular network weights
 seed: 42
-nb_epochs: 20 #Number of epochs
+nb_epochs: 100 #Number of epochs
 loud: True
 validation: False #If True, the model will be validated on the validation set
-unit_wise_normalization: True
 
 wandb:
   project: "CorrelationsRuinGD"
