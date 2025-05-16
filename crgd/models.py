@@ -58,7 +58,7 @@ class DenseNet(torch.nn.Module):
                 )
 
             # Add activation function
-            if (i + 1) < num_hidden_layers:
+            if i < num_hidden_layers:
                 self.layers.append(activation_function())
 
         self.model = torch.nn.Sequential(*self.layers)

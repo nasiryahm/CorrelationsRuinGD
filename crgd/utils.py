@@ -367,7 +367,7 @@ def construct_dataloaders(
         test_transforms = v2.Compose([v2.CenterCrop(56)])
 
         x_train, y_train, x_test, y_test = load_dataset(
-            tv_dataset, device, torch.float32, validation=validation, mean=mean, std=std
+            tv_dataset, device, torch.float32, validation=validation
         )
 
         train_dataset = ClassificationLoadedDataset(x_train, y_train, train_transforms)
