@@ -130,6 +130,7 @@ def train_network(
             eps=eps,
             lr=fwd_lr,
             weight_decay=regularizer_strength,
+            foreach=False,
         )
     elif optimizer_type == "SGD":
         optimizer = torch.optim.SGD(
@@ -241,6 +242,13 @@ def run(config: DictConfig) -> None:
     act_func = torch.nn.LeakyReLU
     if config.layer_type == "DFA" or config.layer_type == "DFAConv":
         act_func = ST_LeakyReLU
+
+    if config.dtype == "float64":
+        torch.set_default_dtype(torch.float64)
+    elif config.dtype == "float32":
+        torch.set_default_dtype(torch.float32)
+    else:
+        raise ValueError("Invalid dtype specified. Use 'float32' or 'float64'.")
 
     metrics = train_network(
         batch_size=config.batch_size,

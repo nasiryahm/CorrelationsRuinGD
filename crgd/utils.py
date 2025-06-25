@@ -290,6 +290,7 @@ def construct_dataloaders(
                 [
                     v2.RandomCrop(32, padding=4),
                     v2.RandomHorizontalFlip(),
+                    v2.RandomRotation(15),
                     v2.ToTensor(),
                     v2.Normalize((0.4914, 0.4822, 0.4465), (0.2023, 0.1994, 0.2010)),
                 ]
@@ -330,6 +331,7 @@ def construct_dataloaders(
                 v2.Resize(256),
                 v2.RandomResizedCrop(224),
                 v2.RandomHorizontalFlip(),
+                v2.RandomRotation(15),
                 v2.ToTensor(),
                 v2.Normalize(mean, std),
             ]
@@ -354,10 +356,10 @@ def construct_dataloaders(
         )
 
         train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=6
+            train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
         )
         test_loader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False, num_workers=6
+            test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
         )
 
     elif tv_dataset == "TIN":
@@ -374,10 +376,10 @@ def construct_dataloaders(
         test_dataset = ClassificationLoadedDataset(x_test, y_test, test_transforms)
 
         train_loader = torch.utils.data.DataLoader(
-            train_dataset, batch_size=batch_size, shuffle=True, num_workers=4
+            train_dataset, batch_size=batch_size, shuffle=True, num_workers=0
         )
         test_loader = torch.utils.data.DataLoader(
-            test_dataset, batch_size=batch_size, shuffle=False, num_workers=4
+            test_dataset, batch_size=batch_size, shuffle=False, num_workers=0
         )
 
     return train_loader, test_loader
